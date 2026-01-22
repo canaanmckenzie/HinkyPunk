@@ -1,20 +1,16 @@
-Canaan McKenzie 2026 General License for Programmers v2 (GLP v2)
+# Canaan McKenzie 2026 General License for Programmers v2 (GLP v2)
 
 Copyright (c) 2026 Canaan McKenzie
 All Rights Reserved.
 
-================================================================================
-                              PREAMBLE
-================================================================================
+## PREAMBLE
 
 This license governs the use, modification, and distribution of the HinkyPunk
 VPN software and associated documentation. Like its namesake - a flickering
 light guiding travelers through darkness - this software is meant to illuminate
 secure paths through the digital wilderness.
 
-================================================================================
-                         TERMS AND CONDITIONS
-================================================================================
+## TERMS AND CONDITIONS
 
 1. DEFINITIONS
 
@@ -101,9 +97,7 @@ secure paths through the digital wilderness.
    c) This License shall be governed by the laws of the jurisdiction in which
       the copyright holder resides.
 
-================================================================================
-                              SUMMARY
-================================================================================
+## SUMMARY
 
 In plain terms:
 
@@ -117,7 +111,7 @@ In plain terms:
   ✗ Don't sue me if something breaks
   ✗ Don't add backdoors (seriously, don't)
 
-================================================================================
+---
 
 Canaan McKenzie
 2026
