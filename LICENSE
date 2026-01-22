@@ -1,0 +1,125 @@
+Canaan McKenzie 2026 General License for Programmers v2 (GLP v2)
+
+Copyright (c) 2026 Canaan McKenzie
+All Rights Reserved.
+
+================================================================================
+                              PREAMBLE
+================================================================================
+
+This license governs the use, modification, and distribution of the HinkyPunk
+VPN software and associated documentation. Like its namesake - a flickering
+light guiding travelers through darkness - this software is meant to illuminate
+secure paths through the digital wilderness.
+
+================================================================================
+                         TERMS AND CONDITIONS
+================================================================================
+
+1. DEFINITIONS
+
+   "Software" refers to the HinkyPunk VPN source code, binaries, documentation,
+   and all associated files contained in this repository.
+
+   "You" refers to any individual or entity exercising rights under this License.
+
+   "Derivative Work" means any work that is based on or derived from the
+   Software.
+
+2. GRANT OF RIGHTS
+
+   Subject to the terms of this License, You are granted a worldwide,
+   royalty-free, non-exclusive license to:
+
+   a) Use the Software for any purpose, including commercial applications.
+
+   b) Study, modify, and adapt the Software to your needs.
+
+   c) Redistribute copies of the original Software.
+
+   d) Distribute Derivative Works under these same terms.
+
+3. CONDITIONS
+
+   The above rights are granted provided that:
+
+   a) You retain this License notice and copyright attribution in all copies
+      or substantial portions of the Software.
+
+   b) You clearly mark any modifications you make to the Software.
+
+   c) Derivative Works must be distributed under this same License (copyleft).
+
+   d) You do not use the name "Canaan McKenzie" or "HinkyPunk" to endorse
+      or promote products derived from this Software without prior written
+      permission.
+
+4. SECURITY CLAUSE
+
+   Given the security-critical nature of VPN software:
+
+   a) You acknowledge that cryptographic software may be subject to export
+      controls in various jurisdictions.
+
+   b) You agree not to intentionally introduce vulnerabilities, backdoors,
+      or weaknesses into the Software or Derivative Works.
+
+   c) Security researchers are explicitly permitted to analyze, test, and
+      report vulnerabilities in accordance with responsible disclosure.
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+   DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR
+   OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE
+   USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF THIS SOFTWARE.
+
+7. TERMINATION
+
+   This License and the rights granted hereunder will terminate automatically
+   upon any breach by You of the terms of this License. Upon termination, You
+   must destroy all copies of the Software in your possession.
+
+8. MISCELLANEOUS
+
+   a) If any provision of this License is held unenforceable, the remaining
+      provisions shall continue in full force and effect.
+
+   b) This License represents the complete agreement concerning the subject
+      matter hereof.
+
+   c) This License shall be governed by the laws of the jurisdiction in which
+      the copyright holder resides.
+
+================================================================================
+                              SUMMARY
+================================================================================
+
+In plain terms:
+
+  ✓ Use it freely (personal, commercial, whatever)
+  ✓ Modify it as you see fit
+  ✓ Share it with others
+  ✓ Learn from it
+
+  ✗ Don't strip the license/attribution
+  ✗ Don't claim you wrote the original
+  ✗ Don't sue me if something breaks
+  ✗ Don't add backdoors (seriously, don't)
+
+================================================================================
+
+Canaan McKenzie
+2026
+
+"A Hinkypunk lights the way."
