@@ -84,7 +84,7 @@ sudo pacman -S base-devel
 
 **Build:**
 ```bash
-git clone https://github.com/yourusername/hinkypunk.git
+git clone https://github.com/canaanmckenzie/hinkypunk.git
 cd hinkypunk
 
 # Standard build
@@ -720,7 +720,7 @@ sudo apt update
 sudo apt install -y build-essential git
 
 # Clone and build
-git clone https://github.com/yourusername/hinkypunk.git
+git clone https://github.com/canaanmckenzie/hinkypunk.git
 cd hinkypunk
 make
 
