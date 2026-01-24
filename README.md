@@ -1,6 +1,6 @@
 # HinkyPunk VPN
 
-A secure, high-performance VPN built from scratch in C.
+A secure, high-performance VPN built from scratch in pure C.
 
 ```
  _   _ _       _          ____             _
@@ -15,18 +15,44 @@ HinkyPunk is a modern VPN implementation using the Noise Protocol Framework, the
 
 ---
 
+## Linux Quickstart (5 Minutes)
+
+```bash
+# 1. Clone and build
+git clone https://github.com/canaanmckenzie/HinkyPunk.git
+cd HinkyPunk
+./quickstart.sh build
+
+# 2. Run the interactive setup wizard
+./quickstart.sh setup
+# Follow prompts: choose server/client, set IPs, exchange keys
+
+# 3. Start the VPN
+sudo ./bin/vpn -c configs/server.conf   # On server
+sudo ./bin/vpn -c configs/client.conf   # On client
+
+# 4. Test connectivity
+ping 10.0.0.1   # From client to server
+```
+
+**Or do everything in one command:**
+```bash
+./quickstart.sh all   # Clean, build, and run setup wizard
+```
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
-- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Architecture](#architecture)
+- [Cryptographic Foundations](#cryptographic-foundations)
+- [The Noise Protocol](#the-noise-protocol)
 - [Installation](#installation)
-  - [Linux](#linux-installation)
-  - [Windows](#windows-installation)
-  - [macOS](#macos-installation)
 - [Configuration](#configuration)
 - [Usage Guide](#usage-guide)
-- [Testing Your Setup](#testing-your-setup)
-- [Architecture](#architecture)
+- [C Implementation Details](#c-implementation-details)
 - [Security](#security)
 - [Troubleshooting](#troubleshooting)
 
@@ -39,487 +65,64 @@ HinkyPunk is a modern VPN implementation using the Noise Protocol Framework, the
 - **Cross-Platform**: Linux, Windows (Wintun), macOS (utun)
 - **Zero Dependencies**: Built from scratch, no OpenSSL or libsodium required
 - **WireGuard-Compatible Config**: Use familiar configuration format
-- **Minimal Attack Surface**: ~5000 lines of heavily audited C code
+- **Minimal Attack Surface**: ~5000 lines of heavily documented C code
 
 ---
 
-## Quick Start
+## How It Works
 
-```bash
-# 1. Build HinkyPunk
-make
+### The Big Picture
 
-# 2. Verify build
-make verify
-
-# 3. Quick deployment setup (Kali <-> Ubuntu)
-# On server:
-./deploy/setup.sh server 10.0.0.1 <SERVER_IP> 51820
-
-# On client:
-./deploy/setup.sh client 10.0.0.2 <SERVER_IP> 51820
-
-# 4. Run
-sudo ./bin/vpn -c deploy/configs/server.conf   # On server
-sudo ./bin/vpn -c deploy/configs/client.conf   # On client
-```
-
-**Or manual setup:**
-
-```bash
-# Generate keys
-./bin/vpn genkey > server.key
-./bin/vpn pubkey < server.key > server.pub
-
-./bin/vpn genkey > client.key
-./bin/vpn pubkey < client.key > client.pub
-
-# Create configs (see Configuration section)
-# Run
-sudo ./bin/vpn -c server.conf   # On server
-sudo ./bin/vpn -c client.conf   # On client
-```
-
----
-
-## Installation
-
-### Linux Installation
-
-**Prerequisites:**
-```bash
-# Debian/Ubuntu
-sudo apt update
-sudo apt install build-essential
-
-# Fedora/RHEL
-sudo dnf install gcc make
-
-# Arch
-sudo pacman -S base-devel
-```
-
-**Build:**
-```bash
-git clone https://github.com/canaanmckenzie/hinkypunk.git
-cd hinkypunk
-
-# Standard build
-make
-
-# Debug build (includes symbols, no optimization)
-make DEBUG=1
-
-# Release build (full optimization)
-make RELEASE=1
-```
-
-**Verify build:**
-```bash
-$ ./bin/vpn -h
-Usage: ./bin/vpn [OPTIONS]
-
-Options:
-  -c <file>         Configuration file (WireGuard format)
-  -l <port>         Listen port (default: 51820)
-  -k <keyfile>      Private key file (default: vpn.key)
-  -p <peer>         Add peer: <pubkey>@<endpoint>
-  -i <ip/prefix>    Set tunnel IP address
-  -r <ip/prefix>    Add allowed IP for last peer
-  -v                Verbose output (debug logging)
-  -h                Show this help
-
-Key Generation:
-  ./bin/vpn genkey         Generate new private key
-  ./bin/vpn pubkey         Derive public key from stdin
-```
-
-**Install system-wide (optional):**
-```bash
-sudo cp bin/vpn /usr/local/bin/hinkypunk
-sudo chmod +x /usr/local/bin/hinkypunk
-```
-
----
-
-### Windows Installation
-
-**Prerequisites:**
-
-1. **MinGW-w64** or **Visual Studio Build Tools**
-   ```powershell
-   # Using winget
-   winget install -e --id GnuWin32.Make
-   winget install -e --id mingw-w64.mingw-w64
-   ```
-
-2. **Wintun Driver** - Download from [wintun.net](https://www.wintun.net/)
-   ```powershell
-   # Extract wintun.dll to the build directory
-   # Choose the appropriate architecture (amd64 for 64-bit)
-   ```
-
-**Build:**
-```powershell
-# In MinGW terminal or Developer Command Prompt
-cd hinkypunk
-make
-
-# Or with explicit compiler
-make CC=gcc
-```
-
-**Setup Wintun:**
-```powershell
-# Copy wintun.dll to same directory as vpn.exe
-copy path\to\wintun\bin\amd64\wintun.dll bin\
-```
-
-**Verify:**
-```powershell
-.\bin\vpn.exe -h
-```
-
-> **Note:** Run Command Prompt or PowerShell as Administrator for VPN operations.
-
----
-
-### macOS Installation
-
-**Prerequisites:**
-```bash
-# Install Xcode Command Line Tools
-xcode-select --install
-```
-
-**Build:**
-```bash
-cd hinkypunk
-make
-```
-
-**Verify:**
-```bash
-./bin/vpn -h
-```
-
-> **Note:** macOS uses the built-in utun interface. No additional drivers needed.
-
----
-
-## Configuration
-
-HinkyPunk uses WireGuard-compatible configuration files.
-
-### Generate Keys
-
-```bash
-# Generate a new private key (base64 encoded)
-$ ./bin/vpn genkey
-kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=
-
-# Derive public key from private key
-$ echo "kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=" | ./bin/vpn pubkey
-aB3dEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG=
-```
-
-### Server Configuration
-
-Create `server.conf`:
-
-```ini
-[Interface]
-# Server's private key (keep secret!)
-PrivateKey = kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=
-
-# VPN IP address for this server
-Address = 10.0.0.1/24
-
-# UDP port to listen on
-ListenPort = 51820
-
-[Peer]
-# Client's PUBLIC key
-PublicKey = CLIENT_PUBLIC_KEY_HERE
-
-# IPs this peer is allowed to have
-AllowedIPs = 10.0.0.2/32
-```
-
-### Client Configuration
-
-Create `client.conf`:
-
-```ini
-[Interface]
-# Client's private key (keep secret!)
-PrivateKey = CLIENT_PRIVATE_KEY_HERE
-
-# VPN IP address for this client
-Address = 10.0.0.2/24
-
-[Peer]
-# Server's PUBLIC key
-PublicKey = SERVER_PUBLIC_KEY_HERE
-
-# Server's public IP and port
-Endpoint = your.server.com:51820
-
-# Route all traffic through VPN (or specific subnets)
-AllowedIPs = 0.0.0.0/0
-
-# Keep connection alive through NAT
-PersistentKeepalive = 25
-```
-
-### Configuration Reference
-
-| Option | Section | Description |
-|--------|---------|-------------|
-| `PrivateKey` | Interface | Base64 private key (required) |
-| `Address` | Interface | VPN IP with CIDR prefix |
-| `ListenPort` | Interface | UDP listen port (server) |
-| `DNS` | Interface | DNS servers (optional) |
-| `MTU` | Interface | Interface MTU (default: 1420) |
-| `PublicKey` | Peer | Peer's public key (required) |
-| `PresharedKey` | Peer | Additional symmetric key (optional) |
-| `Endpoint` | Peer | Peer's address:port |
-| `AllowedIPs` | Peer | Allowed source IPs (comma-separated) |
-| `PersistentKeepalive` | Peer | Keepalive interval in seconds |
-
----
-
-## Usage Guide
-
-### Step 1: Generate Keys for Both Machines
-
-**On the Server:**
-```bash
-# Generate server keypair
-./bin/vpn genkey > server_private.key
-./bin/vpn pubkey < server_private.key > server_public.key
-
-# View the public key (share this with clients)
-cat server_public.key
-```
-
-**On the Client:**
-```bash
-# Generate client keypair
-./bin/vpn genkey > client_private.key
-./bin/vpn pubkey < client_private.key > client_public.key
-
-# View the public key (share this with server)
-cat client_public.key
-```
-
-### Step 2: Exchange Public Keys
+A VPN creates an encrypted tunnel between two machines. HinkyPunk works like this:
 
 ```
-+------------------+                      +------------------+
-|     SERVER       |                      |     CLIENT       |
-+------------------+                      +------------------+
-|                  |   server_public.key  |                  |
-| server_private   | -------------------> | (in client.conf) |
-| server_public    |                      |                  |
-|                  |   client_public.key  |                  |
-| (in server.conf) | <------------------- | client_private   |
-|                  |                      | client_public    |
-+------------------+                      +------------------+
+┌─────────────────┐                           ┌─────────────────┐
+│   Your App      │                           │   Remote App    │
+│  (browser, ssh) │                           │  (web server)   │
+└────────┬────────┘                           └────────┬────────┘
+         │ IP packet                                   │
+         ▼                                             ▼
+┌─────────────────┐                           ┌─────────────────┐
+│  TUN Interface  │                           │  TUN Interface  │
+│   (vpn0)        │                           │   (vpn0)        │
+└────────┬────────┘                           └────────┬────────┘
+         │ Raw IP packet                               │
+         ▼                                             ▼
+┌─────────────────┐                           ┌─────────────────┐
+│   HinkyPunk     │                           │   HinkyPunk     │
+│   VPN Process   │                           │   VPN Process   │
+│                 │                           │                 │
+│  1. Encrypt     │                           │  1. Decrypt     │
+│  2. Authenticate│                           │  2. Verify MAC  │
+│  3. Send UDP    │                           │  3. Inject TUN  │
+└────────┬────────┘                           └────────┬────────┘
+         │ Encrypted UDP                               │
+         ▼                                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        Internet (Untrusted)                      │
+│              Attackers see only encrypted gibberish              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Step 3: Create Configuration Files
+### The TUN Device
 
-**Server (`/etc/hinkypunk/server.conf`):**
-```ini
-[Interface]
-PrivateKey = SERVER_PRIVATE_KEY
-Address = 10.0.0.1/24
-ListenPort = 51820
+A **TUN device** is a virtual network interface. Unlike a physical NIC that connects to a wire, a TUN device connects to a userspace program.
 
-[Peer]
-# Client 1
-PublicKey = CLIENT_1_PUBLIC_KEY
-AllowedIPs = 10.0.0.2/32
+When the kernel routes a packet to `vpn0`, instead of sending it out a wire:
+1. The packet appears in our program via `read(tun_fd)`
+2. We encrypt it and send via UDP
+3. The remote peer decrypts and writes to their TUN via `write(tun_fd)`
+4. The kernel routes it to the destination application
 
-[Peer]
-# Client 2 (you can have multiple peers)
-PublicKey = CLIENT_2_PUBLIC_KEY
-AllowedIPs = 10.0.0.3/32
-```
+This is why VPNs need root: creating network interfaces requires elevated privileges.
 
-**Client (`/etc/hinkypunk/client.conf`):**
-```ini
-[Interface]
-PrivateKey = CLIENT_PRIVATE_KEY
-Address = 10.0.0.2/24
+### Why UDP?
 
-[Peer]
-PublicKey = SERVER_PUBLIC_KEY
-Endpoint = 203.0.113.1:51820
-AllowedIPs = 10.0.0.0/24
-PersistentKeepalive = 25
-```
+HinkyPunk uses UDP transport, not TCP, for two reasons:
 
-### Step 4: Start the VPN
+1. **Performance**: TCP has built-in retransmission and congestion control. If we tunnel TCP inside TCP, when packets are lost, BOTH layers retransmit, causing exponential backoff ("TCP meltdown").
 
-**On the Server:**
-```bash
-# Start with verbose logging
-sudo ./bin/vpn -v -c /etc/hinkypunk/server.conf
-
-# Expected output:
-===============================================
-  HinkyPunk VPN
-===============================================
-
-[INFO] Loaded configuration from /etc/hinkypunk/server.conf
-[INFO] Public key: aB3dEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG=
-[INFO] Added peer (no endpoint, will accept incoming)
-[INFO] Listening on UDP port 51820
-[INFO] Opened TUN interface: tun0
-VPN running. Press Ctrl+C to stop.
-```
-
-**On the Client:**
-```bash
-sudo ./bin/vpn -v -c /etc/hinkypunk/client.conf
-
-# Expected output:
-===============================================
-  HinkyPunk VPN
-===============================================
-
-[INFO] Loaded configuration from /etc/hinkypunk/client.conf
-[INFO] Public key: xY9zAbCdEfGhIjKlMnOpQrStUvWxYz012345678901=
-[INFO] Added peer with endpoint 203.0.113.1:51820
-[INFO] Listening on UDP port 51820
-[INFO] Opened TUN interface: tun0
-VPN running. Press Ctrl+C to stop.
-```
-
-### Step 5: Verify Connection
-
-**Check interface exists:**
-```bash
-# Linux
-ip addr show tun0
-
-# macOS
-ifconfig utun0
-
-# Windows (PowerShell as Admin)
-Get-NetAdapter | Where-Object {$_.InterfaceDescription -like "*HinkyPunk*"}
-```
-
-**Test connectivity:**
-```bash
-# From client, ping server's VPN IP
-ping 10.0.0.1
-
-# From server, ping client's VPN IP
-ping 10.0.0.2
-```
-
----
-
-## Testing Your Setup
-
-### Test 1: Local Key Generation
-
-```bash
-$ ./bin/vpn genkey | tee /dev/stderr | ./bin/vpn pubkey
-kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=    # Private key
-aB3dEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG=    # Public key
-
-# Keys should be 44 characters (base64 with padding)
-```
-
-### Test 2: Loopback Test (Single Machine)
-
-Test on one machine using two terminals:
-
-**Terminal 1 - Server:**
-```bash
-# Create server config
-cat > /tmp/server.conf << 'EOF'
-[Interface]
-PrivateKey = kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=
-Address = 10.200.200.1/24
-ListenPort = 51820
-
-[Peer]
-PublicKey = CLIENT_PUB_KEY_HERE
-AllowedIPs = 10.200.200.2/32
-EOF
-
-sudo ./bin/vpn -v -c /tmp/server.conf
-```
-
-**Terminal 2 - Client:**
-```bash
-# Create client config
-cat > /tmp/client.conf << 'EOF'
-[Interface]
-PrivateKey = mN3oPqRsTuVwXyZ0123456789AbCdEfGhIjKlMnOpQr=
-Address = 10.200.200.2/24
-
-[Peer]
-PublicKey = SERVER_PUB_KEY_HERE
-Endpoint = 127.0.0.1:51820
-AllowedIPs = 10.200.200.0/24
-EOF
-
-sudo ./bin/vpn -v -c /tmp/client.conf
-```
-
-**Terminal 3 - Test:**
-```bash
-# Ping through the tunnel
-ping -c 3 10.200.200.1
-
-# Expected output:
-PING 10.200.200.1 (10.200.200.1) 56(84) bytes of data.
-64 bytes from 10.200.200.1: icmp_seq=1 ttl=64 time=0.123 ms
-64 bytes from 10.200.200.1: icmp_seq=2 ttl=64 time=0.089 ms
-64 bytes from 10.200.200.1: icmp_seq=3 ttl=64 time=0.091 ms
-```
-
-### Test 3: Handshake Verification
-
-With `-v` (verbose) mode, you should see handshake messages:
-
-```
-[DEBUG] Sent handshake initiation to peer
-[DEBUG] Received handshake response
-[INFO] Handshake completed successfully!
-```
-
-### Test 4: Traffic Inspection
-
-Use tcpdump to verify traffic is encrypted:
-
-```bash
-# On the server, capture UDP traffic
-sudo tcpdump -i eth0 udp port 51820 -X
-
-# You should see encrypted packets, NOT readable IP headers
-# The payload should look like random bytes
-```
-
-### Test 5: Throughput Test
-
-```bash
-# Install iperf3 on both machines
-# On server:
-iperf3 -s -B 10.0.0.1
-
-# On client:
-iperf3 -c 10.0.0.1 -t 10
-
-# Expected: Near line speed depending on CPU
-# Typical: 500 Mbps - 2 Gbps on modern hardware
-```
+2. **Simplicity**: UDP is connectionless. Peers can come and go without connection setup overhead.
 
 ---
 
@@ -527,9 +130,9 @@ iperf3 -c 10.0.0.1 -t 10
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        HinkyPunk VPN                            │
+│                        HinkyPunk VPN                             │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
+│                                                                  │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
 │  │   config    │    │    main     │    │     log     │         │
 │  │   parser    │───▶│   program   │◀───│   system    │         │
@@ -562,74 +165,540 @@ iperf3 -c 10.0.0.1 -t 10
 ### Directory Structure
 
 ```
-hinkypunk/
+HinkyPunk/
 ├── src/
-│   ├── main.c              # Entry point, CLI parsing
-│   ├── config.c            # Configuration file parser
+│   ├── main.c              # Entry point, event loop
+│   ├── config.c            # WireGuard config parser
 │   ├── types.h             # Common types and constants
 │   │
-│   ├── crypto/             # Cryptographic primitives
-│   │   ├── chacha20.c      # ChaCha20 stream cipher
-│   │   ├── poly1305.c      # Poly1305 MAC
+│   ├── crypto/             # Cryptographic primitives (all from scratch)
+│   │   ├── chacha20.c      # ChaCha20 stream cipher (RFC 8439)
+│   │   ├── poly1305.c      # Poly1305 MAC (RFC 8439)
 │   │   ├── aead.c          # ChaCha20-Poly1305 AEAD
-│   │   ├── curve25519.c    # Curve25519 ECDH
-│   │   └── blake2s.c       # BLAKE2s hash + HMAC + HKDF
+│   │   ├── curve25519.c    # Curve25519 ECDH (RFC 7748)
+│   │   └── blake2s.c       # BLAKE2s hash + HMAC + HKDF (RFC 7693)
 │   │
-│   ├── protocol/           # VPN protocol
+│   ├── protocol/           # VPN protocol layer
 │   │   ├── noise.c         # Noise IK handshake
 │   │   ├── packet.c        # Wire format encoding
-│   │   ├── peer.c          # Peer management
+│   │   ├── peer.c          # Peer and session management
 │   │   ├── replay.c        # Replay attack protection
-│   │   └── timers.c        # Session timers
+│   │   └── timers.c        # Rekey and keepalive timers
 │   │
-│   ├── net/                # Network layer
-│   │   ├── udp.c           # UDP socket abstraction
-│   │   └── tun.c           # TUN interface (Linux/Win/Mac)
+│   ├── net/                # Network abstraction
+│   │   ├── udp.c           # Cross-platform UDP sockets
+│   │   └── tun.c           # TUN device (Linux/macOS/Windows)
 │   │
 │   └── util/               # Utilities
 │       ├── memory.c        # Secure memory operations
-│       ├── random.c        # CSPRNG
+│       ├── random.c        # CSPRNG wrapper
 │       └── log.c           # Logging system
 │
+├── quickstart.sh           # Build and setup script
 ├── Makefile                # Build system
-├── README.md               # This file
-└── DEVELOPMENT.md               # Development notes
+└── README.md               # This file
 ```
+
+---
+
+## Cryptographic Foundations
+
+HinkyPunk implements all cryptography from scratch. Here's what each piece does and why:
+
+### ChaCha20 - Stream Cipher
+
+**Purpose**: Encrypt data so only the key holder can read it.
+
+**How it works**: ChaCha20 generates a stream of pseudorandom bytes from a key and nonce. XORing this keystream with plaintext produces ciphertext:
+
+```
+Ciphertext = Plaintext XOR KeyStream(Key, Nonce)
+Plaintext  = Ciphertext XOR KeyStream(Key, Nonce)  # Same operation!
+```
+
+**The State Matrix**: ChaCha20 maintains a 4x4 matrix of 32-bit words:
+
+```
+┌──────────┬──────────┬──────────┬──────────┐
+│ "expa"   │ "nd 3"   │ "2-by"   │ "te k"   │  ← Constant (ASCII)
+├──────────┼──────────┼──────────┼──────────┤
+│  Key[0]  │  Key[1]  │  Key[2]  │  Key[3]  │  ← 256-bit key
+├──────────┼──────────┼──────────┼──────────┤
+│  Key[4]  │  Key[5]  │  Key[6]  │  Key[7]  │
+├──────────┼──────────┼──────────┼──────────┤
+│ Counter  │ Nonce[0] │ Nonce[1] │ Nonce[2] │  ← 96-bit nonce
+└──────────┴──────────┴──────────┴──────────┘
+```
+
+**The Quarter Round**: The core mixing function uses only ADD, XOR, and ROTATE:
+
+```c
+a += b; d ^= a; d = ROTL(d, 16);
+c += d; b ^= c; b = ROTL(b, 12);
+a += b; d ^= a; d = ROTL(d, 8);
+c += d; b ^= c; b = ROTL(b, 7);
+```
+
+These operations are:
+- **Fast**: No table lookups (cache-timing safe)
+- **Reversible individually**: But combined, one-way
+- **Non-linear**: XOR and ADD interact chaotically
+
+After 20 rounds (80 quarter rounds), the state is thoroughly mixed. The original state is added back (feedforward), making the function non-invertible.
+
+**Security**: Nonce must NEVER be reused with the same key. If you encrypt two messages with the same key/nonce: `C1 XOR C2 = P1 XOR P2` - the keystream cancels out!
+
+### Poly1305 - Message Authentication Code
+
+**Purpose**: Prove a message hasn't been tampered with.
+
+**How it works**: Poly1305 treats the message as coefficients of a polynomial, evaluates it at a secret point `r`, and adds a secret pad `s`:
+
+```
+Tag = ((m[1]·r^n + m[2]·r^(n-1) + ... + m[n]·r) mod (2^130 - 5)) + s
+```
+
+**Why 2^130 - 5?** This prime has a special property: `2^130 ≡ 5 (mod p)`. When numbers overflow 130 bits, we can efficiently reduce by multiplying the overflow by 5.
+
+**One-time key requirement**: The key (r, s) must be used ONLY ONCE. If you authenticate two messages with the same key, an attacker can solve for `r` and forge tags for any message.
+
+In ChaCha20-Poly1305, the Poly1305 key is derived from ChaCha20 block 0, so each unique nonce produces a unique Poly1305 key.
+
+### Curve25519 - Key Exchange
+
+**Purpose**: Two parties create a shared secret without ever transmitting it.
+
+**The math**: Elliptic curve Diffie-Hellman on the curve y² = x³ + 486662x² + x (mod 2^255 - 19):
+
+```
+Alice                              Bob
+─────                              ───
+a = random()                       b = random()
+A = a × G (scalar mult)            B = b × G
+
+      ──── Exchange A, B ────
+
+shared = a × B                     shared = b × A
+       = a × (b × G)                     = b × (a × G)
+       = (a × b) × G                     = (a × b) × G
+                    ↑ Same value! ↑
+```
+
+**Montgomery Ladder**: Our implementation uses the Montgomery ladder algorithm, which is naturally constant-time (no secret-dependent branches).
+
+**Clamping**: Before use, private keys are "clamped":
+```c
+key[0] &= 248;   // Clear low 3 bits (make divisible by 8)
+key[31] &= 127;  // Clear high bit
+key[31] |= 64;   // Set second-highest bit
+```
+This prevents small-subgroup attacks and ensures the scalar is in the valid range.
+
+### BLAKE2s - Hash Function
+
+**Purpose**: Create a fixed-size fingerprint of arbitrary data.
+
+**Properties**:
+- **Deterministic**: Same input always produces same output
+- **One-way**: Given hash, can't find input
+- **Collision-resistant**: Hard to find two inputs with same hash
+- **Avalanche**: Tiny change in input → drastic change in output
+
+**Why not SHA-256?** BLAKE2s is faster, simpler, and based on ChaCha (same ARX structure). It includes built-in support for:
+- Keyed hashing (MAC without HMAC construction)
+- Personalization (domain separation)
+- Tree hashing
+
+**HKDF**: We use BLAKE2s in HKDF (HMAC-based Key Derivation Function) to derive multiple keys from a shared secret:
+
+```
+Extract: PRK = HMAC(salt, input_key_material)
+Expand:  Key1 = HMAC(PRK, 0x01)
+         Key2 = HMAC(PRK, Key1 || 0x02)
+         Key3 = HMAC(PRK, Key2 || 0x03)
+```
+
+---
+
+## The Noise Protocol
+
+HinkyPunk uses the **Noise IK** handshake pattern. "IK" means the Initiator Knows the responder's static public key in advance (from configuration).
+
+### Handshake Messages
+
+```
+Initiator (Client)                    Responder (Server)
+──────────────────                    ──────────────────
+
+Generate ephemeral keypair (e_i)
+                │
+                ▼
+┌─────────────────────────────────┐
+│ Message 1 (148 bytes)           │
+│ ─────────────────────────────── │
+│ e_i_pub          (32 bytes)     │  Ephemeral public key
+│ Enc(i_static)    (48 bytes)     │  Encrypted static pubkey + tag
+│ Enc(timestamp)   (28 bytes)     │  Encrypted timestamp + tag
+│ MAC1             (16 bytes)     │  DoS protection
+│ MAC2             (16 bytes)     │  Cookie (zeros if none)
+└─────────────────────────────────┘
+                │
+                ├─────────────────────────────────────────▶
+                │
+                │                   Verify MAC1
+                │                   Decrypt i_static using DH(r_static, e_i)
+                │                   Verify timestamp (replay protection)
+                │                   Generate ephemeral keypair (e_r)
+                │
+                │              ┌─────────────────────────────────┐
+                │              │ Message 2 (92 bytes)            │
+                │              │ ─────────────────────────────── │
+                │              │ e_r_pub        (32 bytes)       │
+                │              │ Enc(empty)     (16 bytes)       │
+                │              │ MAC1           (16 bytes)       │
+                │              │ MAC2           (16 bytes)       │
+                │              └─────────────────────────────────┘
+                │                              │
+                ◀──────────────────────────────┘
+                │
+Decrypt using DH(e_i, e_r) + DH(e_i, r_static)
+Derive transport keys from shared secrets
+                │
+                ▼
+        SESSION ESTABLISHED
+```
+
+### Key Derivation
+
+During the handshake, four Diffie-Hellman operations occur:
+
+1. `DH(e_initiator, s_responder)` - Initiator's ephemeral × Responder's static
+2. `DH(s_initiator, s_responder)` - Both static keys
+3. `DH(e_initiator, e_responder)` - Both ephemeral keys
+4. `DH(s_initiator, e_responder)` - Initiator's static × Responder's ephemeral
+
+Each DH result is mixed into the "chaining key" using HKDF. The final chaining key is split into two transport keys: one for each direction.
+
+**Perfect Forward Secrecy**: If static keys are later compromised, past sessions remain secure because ephemeral keys (which contributed to session keys) are erased.
+
+### Transport Data
+
+After handshake, data packets are simple:
+
+```
+┌──────────────────────────────────────────────┐
+│ Type (1 byte)          = 0x04                │
+│ Reserved (3 bytes)     = 0x00 0x00 0x00      │
+│ Receiver Index (4 bytes, LE)                 │
+│ Counter (8 bytes, LE)                        │
+│ Encrypted Payload + Tag (variable + 16)     │
+└──────────────────────────────────────────────┘
+```
+
+The counter serves as the AEAD nonce. It must be strictly increasing (enforced by replay protection).
+
+---
+
+## Installation
+
+### Linux (Ubuntu/Debian)
+
+```bash
+# Install build tools
+sudo apt update
+sudo apt install -y build-essential git
+
+# Clone and build
+git clone https://github.com/canaanmckenzie/HinkyPunk.git
+cd HinkyPunk
+./quickstart.sh build
+
+# Or manually:
+make
+```
+
+### Linux (Fedora/RHEL)
+
+```bash
+sudo dnf install gcc make git
+git clone https://github.com/canaanmckenzie/HinkyPunk.git
+cd HinkyPunk
+make
+```
+
+### Linux (Arch)
+
+```bash
+sudo pacman -S base-devel git
+git clone https://github.com/canaanmckenzie/HinkyPunk.git
+cd HinkyPunk
+make
+```
+
+### Verify Build
+
+```bash
+./bin/vpn -h                    # Show help
+./bin/vpn genkey                # Generate a test key
+./quickstart.sh build           # Builds and runs verification
+```
+
+---
+
+## Configuration
+
+HinkyPunk uses WireGuard-compatible configuration files.
+
+### Generate Keys
+
+```bash
+# Generate private key (keep secret!)
+./bin/vpn genkey > private.key
+
+# Derive public key (share with peers)
+cat private.key | ./bin/vpn pubkey > public.key
+```
+
+### Server Configuration
+
+```ini
+[Interface]
+# Server's private key (NEVER share this!)
+PrivateKey = kG5sTwXjKmZThntP4V8xJDFdqvL9RRhB7NqUoUCwJ1c=
+
+# VPN IP address for this server
+Address = 10.0.0.1/24
+
+# UDP port to listen on
+ListenPort = 51820
+
+[Peer]
+# Client's PUBLIC key (safe to share)
+PublicKey = xY9zAbCdEfGhIjKlMnOpQrStUvWxYz012345678901=
+
+# Only allow this IP from this peer (anti-spoofing)
+AllowedIPs = 10.0.0.2/32
+```
+
+### Client Configuration
+
+```ini
+[Interface]
+# Client's private key
+PrivateKey = mN3oPqRsTuVwXyZ0123456789AbCdEfGhIjKlMnOpQr=
+
+# VPN IP address for this client
+Address = 10.0.0.2/24
+
+[Peer]
+# Server's PUBLIC key
+PublicKey = aB3dEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFG=
+
+# Server's public endpoint
+Endpoint = 203.0.113.1:51820
+
+# Route these IPs through the VPN
+AllowedIPs = 10.0.0.0/24
+
+# Keep NAT mappings alive
+PersistentKeepalive = 25
+```
+
+### Interactive Setup
+
+The easiest way to configure is the setup wizard:
+
+```bash
+./quickstart.sh setup
+```
+
+This interactively:
+1. Asks if you're server or client
+2. Generates or loads keys
+3. Prompts for network settings
+4. Asks for peer's public key
+5. Creates the configuration file
+
+---
+
+## Usage Guide
+
+### Starting the VPN
+
+```bash
+# Server
+sudo ./bin/vpn -c configs/server.conf
+
+# Client
+sudo ./bin/vpn -c configs/client.conf
+
+# With debug logging
+sudo ./bin/vpn -v -c configs/client.conf
+```
+
+### Testing Connectivity
+
+```bash
+# From client, ping server's VPN IP
+ping 10.0.0.1
+
+# From server, ping client's VPN IP
+ping 10.0.0.2
+
+# Check the TUN interface exists
+ip addr show vpn0
+```
+
+### Firewall Configuration
+
+```bash
+# Ubuntu (UFW)
+sudo ufw allow 51820/udp
+
+# Fedora (firewalld)
+sudo firewall-cmd --add-port=51820/udp --permanent
+sudo firewall-cmd --reload
+
+# iptables
+sudo iptables -A INPUT -p udp --dport 51820 -j ACCEPT
+```
+
+---
+
+## C Implementation Details
+
+This section explains key C programming patterns used throughout the codebase.
+
+### Constant-Time Comparisons
+
+**Problem**: Standard `memcmp()` returns early on the first byte mismatch. An attacker can measure timing to learn which byte differed.
+
+**Solution**: Always examine ALL bytes:
+
+```c
+// src/util/memory.c
+bool vpn_memeq(const void *a, const void *b, size_t len)
+{
+    const volatile uint8_t *p1 = a;
+    const volatile uint8_t *p2 = b;
+    uint8_t diff = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        diff |= p1[i] ^ p2[i];  // Accumulate differences
+    }
+
+    return diff == 0;  // Only compare at the end
+}
+```
+
+The `volatile` keyword prevents the compiler from optimizing away the loop.
+
+### Secure Memory Zeroing
+
+**Problem**: Compilers may remove "dead" stores. If you zero a key and never read it again, the compiler might skip the zeroing.
+
+**Solution**: Use `volatile` to force the write:
+
+```c
+void vpn_memzero(void *ptr, size_t len)
+{
+    volatile uint8_t *p = (volatile uint8_t *)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+```
+
+### Platform Abstraction
+
+The codebase abstracts platform differences with preprocessor conditionals:
+
+```c
+// src/net/udp.c
+#ifdef _WIN32
+    typedef SOCKET udp_socket_t;
+    #define INVALID_SOCKET_VALUE INVALID_SOCKET
+#else
+    typedef int udp_socket_t;
+    #define INVALID_SOCKET_VALUE (-1)
+#endif
+```
+
+### Error Handling Pattern
+
+Functions return error codes; success is always 0:
+
+```c
+typedef enum {
+    VPN_OK          =  0,
+    VPN_ERR_GENERIC = -1,
+    VPN_ERR_NOMEM   = -2,
+    VPN_ERR_CRYPTO  = -4,
+    VPN_ERR_AUTH    = -5,
+} vpn_error_t;
+
+// Usage:
+vpn_error_t err = some_function();
+if (err != VPN_OK) {
+    LOG_ERROR("Operation failed: %d", err);
+    return err;  // Propagate error
+}
+```
+
+### Fixed-Width Integer Types
+
+Cryptographic code requires exact bit widths. We use `<stdint.h>` types:
+
+```c
+uint8_t   // Exactly 8 bits (bytes)
+uint32_t  // Exactly 32 bits (ChaCha20 words)
+uint64_t  // Exactly 64 bits (counters, Poly1305 accumulators)
+```
+
+### Little-Endian Encoding
+
+Network protocols and WireGuard use little-endian. We explicitly encode:
+
+```c
+static inline void write_u32_le(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)(v);
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+```
+
+This works correctly regardless of the host's native byte order.
 
 ---
 
 ## Security
 
-### Cryptographic Primitives
+### Cryptographic Properties
 
-| Purpose | Algorithm | Security Level |
-|---------|-----------|----------------|
-| Key Exchange | Curve25519 ECDH | 128-bit |
-| Encryption | ChaCha20-Poly1305 | 256-bit key |
-| Hashing | BLAKE2s | 256-bit output |
-| Key Derivation | HKDF-BLAKE2s | 256-bit |
+| Property | How HinkyPunk Achieves It |
+|----------|---------------------------|
+| **Confidentiality** | ChaCha20 encryption with 256-bit keys |
+| **Integrity** | Poly1305 MAC on every packet |
+| **Authenticity** | Noise IK handshake verifies peer identity |
+| **Forward Secrecy** | Ephemeral keys in every handshake |
+| **Replay Protection** | 2048-packet sliding window + counters |
 
-### Security Features
+### What We Protect Against
 
-- **Perfect Forward Secrecy**: New ephemeral keys per handshake
-- **Replay Protection**: 8192-packet sliding window
-- **Key Rotation**: Automatic rekey every 2 minutes
-- **Constant-Time Operations**: Resistant to timing attacks
-- **Memory Zeroing**: Sensitive data cleared after use
-- **CSPRNG**: Platform-native secure random (BCryptGenRandom/getrandom/arc4random)
-
-### Threat Model
-
-HinkyPunk protects against:
 - Passive eavesdropping
-- Active man-in-the-middle attacks
+- Active man-in-the-middle
 - Replay attacks
-- Traffic analysis (packet sizes are padded)
+- Packet injection
+- Source IP spoofing (via AllowedIPs)
 
-HinkyPunk does NOT protect against:
+### What We Don't Protect Against
+
 - Compromised endpoints
-- Traffic correlation attacks
+- Traffic analysis (timing, packet sizes)
 - Denial of service
+- Key compromise (secure your private keys!)
 
 ---
 
@@ -637,546 +706,56 @@ HinkyPunk does NOT protect against:
 
 ### "Failed to open TUN interface"
 
-**Linux:**
+This requires root privileges:
+
 ```bash
-# Check if TUN module is loaded
-lsmod | grep tun
-
-# Load it if missing
-sudo modprobe tun
-
-# Verify /dev/net/tun exists
-ls -la /dev/net/tun
-```
-
-**Windows:**
-```powershell
-# Ensure wintun.dll is present
-dir .\bin\wintun.dll
-
-# Run as Administrator
-# Right-click Command Prompt -> Run as Administrator
-```
-
-**macOS:**
-```bash
-# utun is built-in, just need root
 sudo ./bin/vpn -c config.conf
+```
+
+On Linux, ensure the TUN module is loaded:
+
+```bash
+sudo modprobe tun
+ls -la /dev/net/tun
 ```
 
 ### "Connection timeout" / No handshake
 
+1. Check firewall allows UDP 51820:
+   ```bash
+   sudo ufw allow 51820/udp
+   ```
+
+2. Verify server is listening:
+   ```bash
+   sudo ss -ulnp | grep 51820
+   ```
+
+3. Check public keys match (server's config has client's pubkey and vice versa)
+
+### "Handshake failed"
+
+Public keys are mismatched. Regenerate and exchange:
+
 ```bash
-# 1. Check UDP port is open on server firewall
-sudo ufw allow 51820/udp        # Ubuntu
-sudo firewall-cmd --add-port=51820/udp --permanent  # Fedora
-
-# 2. Verify server is listening
-sudo ss -ulnp | grep 51820
-
-# 3. Test UDP connectivity
-nc -u server.ip 51820
-
-# 4. Check keys match
-# Server's config [Peer] PublicKey must match client's actual public key
-```
-
-### "Handshake failed" / Authentication error
-
-```bash
-# Public keys are mismatched. Regenerate and exchange again:
-
-# On client:
+# On client
 ./bin/vpn genkey > client.key
-./bin/vpn pubkey < client.key
-# Copy this output to server's config [Peer] PublicKey
+cat client.key | ./bin/vpn pubkey
+# Copy this to server's [Peer] PublicKey
 
-# On server:
+# On server
 ./bin/vpn genkey > server.key
-./bin/vpn pubkey < server.key
-# Copy this output to client's config [Peer] PublicKey
+cat server.key | ./bin/vpn pubkey
+# Copy this to client's [Peer] PublicKey
 ```
 
-### "No route to host" after connection
+### Debug Mode
 
 ```bash
-# Add routes manually if not auto-configured
-# Linux:
-sudo ip route add 10.0.0.0/24 dev tun0
-
-# macOS:
-sudo route add -net 10.0.0.0/24 -interface utun0
-
-# Windows (Admin PowerShell):
-route add 10.0.0.0 mask 255.255.255.0 10.0.0.1
-```
-
-### Enable Debug Logging
-
-```bash
-# Use -v flag for verbose output
 sudo ./bin/vpn -v -c config.conf
-
-# Shows:
-# - Handshake progress
-# - Packet encryption/decryption
-# - Timer events
-# - Error details
 ```
 
----
-
-## Complete Platform Walkthroughs
-
-### Linux Complete Setup (Ubuntu/Debian)
-
-**Step 1: Install dependencies and build**
-```bash
-# Update and install build tools
-sudo apt update
-sudo apt install -y build-essential git
-
-# Clone and build
-git clone https://github.com/canaanmckenzie/hinkypunk.git
-cd hinkypunk
-make
-
-# Verify
-./bin/vpn -h
-```
-
-**Step 2: Generate keys**
-```bash
-# Create directory for configs
-sudo mkdir -p /etc/hinkypunk
-
-# Generate server keys
-./bin/vpn genkey | sudo tee /etc/hinkypunk/server.key
-sudo chmod 600 /etc/hinkypunk/server.key
-cat /etc/hinkypunk/server.key | ./bin/vpn pubkey | sudo tee /etc/hinkypunk/server.pub
-
-# Display public key to share
-echo "Server public key:"
-cat /etc/hinkypunk/server.pub
-```
-
-**Step 3: Create server configuration**
-```bash
-sudo tee /etc/hinkypunk/server.conf << 'EOF'
-[Interface]
-PrivateKey = PASTE_SERVER_PRIVATE_KEY_HERE
-Address = 10.0.0.1/24
-ListenPort = 51820
-
-[Peer]
-PublicKey = PASTE_CLIENT_PUBLIC_KEY_HERE
-AllowedIPs = 10.0.0.2/32
-EOF
-
-# Fix permissions
-sudo chmod 600 /etc/hinkypunk/server.conf
-```
-
-**Step 4: Configure firewall**
-```bash
-# UFW (Ubuntu)
-sudo ufw allow 51820/udp
-sudo ufw reload
-
-# Or iptables
-sudo iptables -A INPUT -p udp --dport 51820 -j ACCEPT
-
-# Enable IP forwarding (for routing traffic)
-echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-```
-
-**Step 5: Start VPN**
-```bash
-# Run in foreground (for testing)
-sudo ./bin/vpn -v -c /etc/hinkypunk/server.conf
-
-# You should see:
-# ===============================================
-#   HinkyPunk VPN
-# ===============================================
-#
-# [INFO] Loaded configuration from /etc/hinkypunk/server.conf
-# [INFO] Public key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# [INFO] Listening on UDP port 51820
-# [INFO] Opened TUN interface: tun0
-# VPN running. Press Ctrl+C to stop.
-```
-
-**Step 6: Verify interface**
-```bash
-# In another terminal
-ip addr show tun0
-
-# Expected output:
-# 4: tun0: <POINTOPOINT,MULTICAST,NOARP,UP,LOWER_UP> mtu 1420 qdisc fq_codel state UP
-#     inet 10.0.0.1/24 scope global tun0
-#        valid_lft forever preferred_lft forever
-
-# Check routes
-ip route | grep tun0
-# 10.0.0.0/24 dev tun0 proto kernel scope link src 10.0.0.1
-```
-
-**Step 7: Create systemd service (optional)**
-```bash
-sudo tee /etc/systemd/system/hinkypunk.service << 'EOF'
-[Unit]
-Description=HinkyPunk VPN
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/hinkypunk -c /etc/hinkypunk/server.conf
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo cp bin/vpn /usr/local/bin/hinkypunk
-sudo systemctl daemon-reload
-sudo systemctl enable hinkypunk
-sudo systemctl start hinkypunk
-sudo systemctl status hinkypunk
-```
-
----
-
-### Windows Complete Setup
-
-**Step 1: Install build tools**
-```powershell
-# Option A: Using Chocolatey
-choco install mingw make -y
-
-# Option B: Using winget
-winget install -e --id GnuWin32.Make
-winget install -e --id mingw-w64.mingw-w64
-
-# Option C: Download MSYS2 from https://www.msys2.org/
-# Then in MSYS2 terminal:
-# pacman -S mingw-w64-x86_64-gcc make
-```
-
-**Step 2: Download Wintun driver**
-```powershell
-# Download from https://www.wintun.net/
-# Or using PowerShell:
-Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile wintun.zip
-Expand-Archive wintun.zip -DestinationPath wintun
-```
-
-**Step 3: Build HinkyPunk**
-```powershell
-# In Command Prompt or MSYS2 terminal
-cd hinkypunk
-make
-
-# Copy Wintun DLL (use amd64 for 64-bit, x86 for 32-bit)
-copy wintun\wintun\bin\amd64\wintun.dll bin\
-
-# Verify
-.\bin\vpn.exe -h
-```
-
-**Step 4: Generate keys**
-```powershell
-# Create config directory
-mkdir C:\ProgramData\HinkyPunk
-
-# Generate keys
-.\bin\vpn.exe genkey > C:\ProgramData\HinkyPunk\client.key
-Get-Content C:\ProgramData\HinkyPunk\client.key | .\bin\vpn.exe pubkey > C:\ProgramData\HinkyPunk\client.pub
-
-# Display public key
-Get-Content C:\ProgramData\HinkyPunk\client.pub
-```
-
-**Step 5: Create client configuration**
-```powershell
-# Create config file
-@"
-[Interface]
-PrivateKey = PASTE_CLIENT_PRIVATE_KEY_HERE
-Address = 10.0.0.2/24
-
-[Peer]
-PublicKey = PASTE_SERVER_PUBLIC_KEY_HERE
-Endpoint = YOUR_SERVER_IP:51820
-AllowedIPs = 10.0.0.0/24
-PersistentKeepalive = 25
-"@ | Out-File -Encoding ASCII C:\ProgramData\HinkyPunk\client.conf
-```
-
-**Step 6: Allow through Windows Firewall**
-```powershell
-# Run as Administrator
-New-NetFirewallRule -DisplayName "HinkyPunk VPN" -Direction Inbound -Protocol UDP -LocalPort 51820 -Action Allow
-New-NetFirewallRule -DisplayName "HinkyPunk VPN Out" -Direction Outbound -Protocol UDP -RemotePort 51820 -Action Allow
-```
-
-**Step 7: Start VPN (Run as Administrator)**
-```powershell
-# Right-click PowerShell -> Run as Administrator
-cd C:\path\to\hinkypunk
-.\bin\vpn.exe -v -c C:\ProgramData\HinkyPunk\client.conf
-
-# Expected output:
-# ===============================================
-#   HinkyPunk VPN
-# ===============================================
-#
-# [INFO] Loaded configuration from C:\ProgramData\HinkyPunk\client.conf
-# [INFO] Public key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# [INFO] Added peer with endpoint YOUR_SERVER_IP:51820
-# [INFO] Listening on UDP port 51820
-# [INFO] Opened TUN interface: HinkyPunk
-# VPN running. Press Ctrl+C to stop.
-```
-
-**Step 8: Verify connection**
-```powershell
-# In another Administrator PowerShell window
-
-# Check adapter
-Get-NetAdapter | Where-Object {$_.InterfaceDescription -like "*Wintun*"}
-
-# Check IP configuration
-Get-NetIPAddress -InterfaceAlias "HinkyPunk"
-
-# Test connectivity
-ping 10.0.0.1
-
-# Check route
-Get-NetRoute -InterfaceAlias "HinkyPunk"
-```
-
-**Step 9: Create Windows Service (optional)**
-```powershell
-# Using NSSM (Non-Sucking Service Manager)
-# Download from https://nssm.cc/
-
-nssm install HinkyPunk C:\path\to\hinkypunk\bin\vpn.exe
-nssm set HinkyPunk AppParameters "-c C:\ProgramData\HinkyPunk\client.conf"
-nssm set HinkyPunk Start SERVICE_AUTO_START
-
-# Start the service
-nssm start HinkyPunk
-```
-
----
-
-### macOS Complete Setup
-
-**Step 1: Install Xcode Command Line Tools**
-```bash
-xcode-select --install
-
-# Wait for installation to complete
-# Click "Install" when prompted
-```
-
-**Step 2: Build HinkyPunk**
-```bash
-cd hinkypunk
-make
-
-# Verify
-./bin/vpn -h
-```
-
-**Step 3: Generate keys**
-```bash
-# Create config directory
-sudo mkdir -p /etc/hinkypunk
-
-# Generate keys
-./bin/vpn genkey | sudo tee /etc/hinkypunk/client.key
-sudo chmod 600 /etc/hinkypunk/client.key
-cat /etc/hinkypunk/client.key | ./bin/vpn pubkey | sudo tee /etc/hinkypunk/client.pub
-
-# Display public key to share with server
-echo "Client public key:"
-cat /etc/hinkypunk/client.pub
-```
-
-**Step 4: Create configuration**
-```bash
-sudo tee /etc/hinkypunk/client.conf << 'EOF'
-[Interface]
-PrivateKey = PASTE_CLIENT_PRIVATE_KEY_HERE
-Address = 10.0.0.2/24
-
-[Peer]
-PublicKey = PASTE_SERVER_PUBLIC_KEY_HERE
-Endpoint = YOUR_SERVER_IP:51820
-AllowedIPs = 10.0.0.0/24
-PersistentKeepalive = 25
-EOF
-
-sudo chmod 600 /etc/hinkypunk/client.conf
-```
-
-**Step 5: Configure macOS Firewall (if enabled)**
-```bash
-# Allow incoming connections in System Preferences > Security & Privacy > Firewall
-# Or via command line:
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/hinkypunk/bin/vpn
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp /path/to/hinkypunk/bin/vpn
-```
-
-**Step 6: Start VPN**
-```bash
-sudo ./bin/vpn -v -c /etc/hinkypunk/client.conf
-
-# Expected output:
-# ===============================================
-#   HinkyPunk VPN
-# ===============================================
-#
-# [INFO] Loaded configuration from /etc/hinkypunk/client.conf
-# [INFO] Public key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# [INFO] Added peer with endpoint YOUR_SERVER_IP:51820
-# [INFO] Listening on UDP port 51820
-# [INFO] Opened TUN interface: utun0
-# VPN running. Press Ctrl+C to stop.
-```
-
-**Step 7: Verify connection**
-```bash
-# In another terminal
-
-# Check interface
-ifconfig utun0
-
-# Expected output:
-# utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1420
-#         inet 10.0.0.2 --> 10.0.0.2 netmask 0xffffff00
-
-# Test connectivity
-ping -c 3 10.0.0.1
-
-# Check routing table
-netstat -rn | grep utun
-```
-
-**Step 8: Add routes manually (if needed)**
-```bash
-# Route specific subnet through VPN
-sudo route add -net 10.0.0.0/24 -interface utun0
-
-# Route all traffic (replace default gateway)
-# WARNING: This will route ALL traffic through VPN
-sudo route delete default
-sudo route add default 10.0.0.1
-```
-
-**Step 9: Create LaunchDaemon (optional)**
-```bash
-sudo tee /Library/LaunchDaemons/com.hinkypunk.vpn.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.hinkypunk.vpn</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/hinkypunk</string>
-        <string>-c</string>
-        <string>/etc/hinkypunk/client.conf</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-EOF
-
-# Copy binary
-sudo cp bin/vpn /usr/local/bin/hinkypunk
-
-# Load the service
-sudo launchctl load /Library/LaunchDaemons/com.hinkypunk.vpn.plist
-
-# Check status
-sudo launchctl list | grep hinkypunk
-```
-
----
-
-## Multi-Platform Testing Scenario
-
-Here's a complete example connecting all three platforms:
-
-```
-                    ┌─────────────────────┐
-                    │   LINUX SERVER      │
-                    │   203.0.113.1       │
-                    │   VPN: 10.0.0.1     │
-                    └──────────┬──────────┘
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-    ┌─────────▼─────────┐     │     ┌──────────▼─────────┐
-    │  WINDOWS CLIENT   │     │     │   MACOS CLIENT     │
-    │  VPN: 10.0.0.2    │     │     │   VPN: 10.0.0.3    │
-    └───────────────────┘     │     └────────────────────┘
-                              │
-                    ┌─────────▼─────────┐
-                    │   LINUX CLIENT    │
-                    │   VPN: 10.0.0.4   │
-                    └───────────────────┘
-```
-
-**Server configuration (`/etc/hinkypunk/server.conf`):**
-```ini
-[Interface]
-PrivateKey = SERVER_PRIVATE_KEY
-Address = 10.0.0.1/24
-ListenPort = 51820
-
-[Peer]
-# Windows client
-PublicKey = WINDOWS_CLIENT_PUBLIC_KEY
-AllowedIPs = 10.0.0.2/32
-
-[Peer]
-# macOS client
-PublicKey = MACOS_CLIENT_PUBLIC_KEY
-AllowedIPs = 10.0.0.3/32
-
-[Peer]
-# Linux client
-PublicKey = LINUX_CLIENT_PUBLIC_KEY
-AllowedIPs = 10.0.0.4/32
-```
-
-**Test from each client:**
-```bash
-# From Windows (PowerShell)
-ping 10.0.0.1    # Server
-ping 10.0.0.3    # macOS client
-ping 10.0.0.4    # Linux client
-
-# From macOS
-ping 10.0.0.1    # Server
-ping 10.0.0.2    # Windows client
-ping 10.0.0.4    # Linux client
-
-# From Linux client
-ping 10.0.0.1    # Server
-ping 10.0.0.2    # Windows client
-ping 10.0.0.3    # macOS client
-```
+Shows handshake progress, encryption/decryption, and errors.
 
 ---
 
@@ -1190,7 +769,8 @@ MIT License - See LICENSE file for details.
 
 - **Noise Protocol Framework** - Trevor Perrin
 - **WireGuard** - Jason A. Donenfeld (protocol inspiration)
-- **Wintun** - WireGuard project (Windows TUN driver)
+- **curve25519-donna** - Adam Langley (Curve25519 implementation)
+- **RFC Authors** - ChaCha20 (RFC 8439), Curve25519 (RFC 7748), BLAKE2 (RFC 7693)
 
 ---
 
