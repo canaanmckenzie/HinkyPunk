@@ -3,8 +3,6 @@
  * ======================================
  */
 
-#include "log.h"
-#include "memory.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +16,10 @@
     #include <syslog.h>
     #include <pthread.h>
 #endif
+
+/* Include log.h AFTER syslog.h so our #undef works */
+#include "log.h"
+#include "memory.h"
 
 /*
  * ===========================================================================
@@ -187,15 +189,20 @@ static const char *level_string(log_level_t level)
 }
 
 #ifndef _WIN32
+/*
+ * Map our log levels to syslog priorities.
+ * Using numeric values since our log.h undefs the syslog macros.
+ * POSIX values: LOG_ERR=3, LOG_WARNING=4, LOG_INFO=6, LOG_DEBUG=7
+ */
 static int level_to_syslog(log_level_t level)
 {
     switch (level) {
-        case LOG_LEVEL_ERROR: return LOG_ERR;
-        case LOG_LEVEL_WARN:  return LOG_WARNING;
-        case LOG_LEVEL_INFO:  return LOG_INFO;
-        case LOG_LEVEL_DEBUG: return LOG_DEBUG;
-        case LOG_LEVEL_TRACE: return LOG_DEBUG;
-        default:              return LOG_INFO;
+        case LOG_LEVEL_ERROR: return 3;  /* LOG_ERR */
+        case LOG_LEVEL_WARN:  return 4;  /* LOG_WARNING */
+        case LOG_LEVEL_INFO:  return 6;  /* LOG_INFO */
+        case LOG_LEVEL_DEBUG: return 7;  /* LOG_DEBUG */
+        case LOG_LEVEL_TRACE: return 7;  /* LOG_DEBUG */
+        default:              return 6;  /* LOG_INFO */
     }
 }
 #endif

@@ -145,7 +145,22 @@ void log_hexdump(log_level_t level, const char *label,
  *
  * These macros provide a convenient interface and automatically include
  * file/line information for debugging.
+ *
+ * Note: We undef syslog.h constants to avoid conflicts.
  */
+
+#ifdef LOG_ERR
+#undef LOG_ERR
+#endif
+#ifdef LOG_WARNING
+#undef LOG_WARNING
+#endif
+#ifdef LOG_INFO
+#undef LOG_INFO
+#endif
+#ifdef LOG_DEBUG
+#undef LOG_DEBUG
+#endif
 
 #define LOG_ERROR(fmt, ...) \
     log_message(LOG_LEVEL_ERROR, __FILE__, __LINE__, fmt, ##__VA_ARGS__)

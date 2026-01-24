@@ -49,16 +49,33 @@ HinkyPunk is a modern VPN implementation using the Noise Protocol Framework, the
 # 1. Build HinkyPunk
 make
 
-# 2. Generate keys
+# 2. Verify build
+make verify
+
+# 3. Quick deployment setup (Kali <-> Ubuntu)
+# On server:
+./deploy/setup.sh server 10.0.0.1 <SERVER_IP> 51820
+
+# On client:
+./deploy/setup.sh client 10.0.0.2 <SERVER_IP> 51820
+
+# 4. Run
+sudo ./bin/vpn -c deploy/configs/server.conf   # On server
+sudo ./bin/vpn -c deploy/configs/client.conf   # On client
+```
+
+**Or manual setup:**
+
+```bash
+# Generate keys
 ./bin/vpn genkey > server.key
 ./bin/vpn pubkey < server.key > server.pub
 
 ./bin/vpn genkey > client.key
 ./bin/vpn pubkey < client.key > client.pub
 
-# 3. Create configs (see Configuration section)
-
-# 4. Run
+# Create configs (see Configuration section)
+# Run
 sudo ./bin/vpn -c server.conf   # On server
 sudo ./bin/vpn -c client.conf   # On client
 ```

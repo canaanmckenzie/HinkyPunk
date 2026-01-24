@@ -2,43 +2,20 @@
  * curve25519.c - Elliptic Curve Diffie-Hellman Implementation
  * ============================================================
  *
- * This implements Curve25519 from scratch. Read curve25519.h for the conceptual
- * overview; this file focuses on the mathematical implementation.
+ * This is an adaptation of curve25519-donna-c64.c by Adam Langley,
+ * which was derived from Daniel J. Bernstein's reference implementation.
  *
- * MATHEMATICAL BACKGROUND:
+ * Original code: https://github.com/agl/curve25519-donna
+ * Released into the public domain.
+ *
+ * OVERVIEW:
  *
  * Curve25519 is a Montgomery curve: y² = x³ + 486662x² + x
  * All arithmetic is done modulo p = 2²⁵⁵ - 19 (a prime).
  *
- * Montgomery curves have a useful property: we can compute scalar multiplication
- * using only the x-coordinate. This is called the "Montgomery ladder" and:
- *   - Uses less memory (no y-coordinate storage)
- *   - Is naturally constant-time (resists timing attacks)
- *   - Has simple, fast formulas
- *
- * FIELD ARITHMETIC:
- *
- * We work in the field F_p where p = 2²⁵⁵ - 19.
- *
- * Representation: We use "radix 2^51" with 5 limbs:
- *   x = x0 + x1*2^51 + x2*2^102 + x3*2^153 + x4*2^204
- *
- * Each limb xi is a 64-bit integer. Limbs can temporarily exceed 2^51 during
- * computation; we "reduce" (carry) periodically.
- *
- * Why 2^51? Because:
- *   - 51 * 5 = 255 bits (perfect for our 255-bit field)
- *   - Two 51-bit numbers multiplied fit in 102 bits
- *   - Sum of 5 such products fits in ~105 bits, still within uint64_t range
- *
- * MONTGOMERY LADDER:
- *
- * To compute n*P (scalar n times point P), we process bits of n from high to low.
- * At each step we maintain two points: (x2, z2) and (x3, z3).
- *
- * The key insight: we can compute the next pair from the current pair using
- * only additions, subtractions, multiplications, and squarings - no conditionals
- * that depend on secret data.
+ * We represent field elements as 5 limbs of 51 bits each in radix 2^51.
+ * The Montgomery ladder computes scalar multiplication using only
+ * the x-coordinate, which is naturally constant-time.
  *
  * REFERENCE: RFC 7748 - Elliptic Curves for Security
  */
@@ -49,489 +26,422 @@
 
 /*
  * ===========================================================================
- * Field Element Representation
- * ===========================================================================
- *
- * A field element in F_p is represented as 5 64-bit limbs in radix 2^51.
- * We allow limbs to be slightly larger than 2^51 during computation.
- */
-
-typedef int64_t fe[5];  /* Field element: 5 limbs in radix 2^51 */
-
-/*
- * Curve constant: a24 = (486662 - 2) / 4 = 121665
- *
- * This constant appears in the Montgomery ladder formulas.
- * 486662 is the 'A' coefficient of the Montgomery curve equation.
- */
-static const int64_t A24 = 121665;
-
-/*
- * ===========================================================================
- * Field Arithmetic
+ * Type Definitions
  * ===========================================================================
  */
 
+typedef uint64_t limb;
+typedef limb felem[5];
+
+/* 128-bit integer for intermediate products */
+#ifdef __SIZEOF_INT128__
+typedef unsigned __int128 uint128_t;
+#else
+#error "This implementation requires __int128 support"
+#endif
+
 /*
- * fe_copy - Copy a field element
+ * ===========================================================================
+ * Field Arithmetic (from curve25519-donna)
+ * ===========================================================================
  */
-static void fe_copy(fe h, const fe f)
+
+/* Sum two numbers: output += in */
+static inline void
+fsum(limb *output, const limb *in)
 {
-    h[0] = f[0];
-    h[1] = f[1];
-    h[2] = f[2];
-    h[3] = f[3];
-    h[4] = f[4];
+    output[0] += in[0];
+    output[1] += in[1];
+    output[2] += in[2];
+    output[3] += in[3];
+    output[4] += in[4];
 }
 
-/*
- * fe_0 - Set field element to zero
- */
-static void fe_0(fe h)
+/* Find the difference: output = in - output (note argument order!) */
+static inline void
+fdifference_backwards(felem out, const felem in)
 {
-    h[0] = 0;
-    h[1] = 0;
-    h[2] = 0;
-    h[3] = 0;
-    h[4] = 0;
+    static const limb two54m152 = (((limb)1) << 54) - 152;
+    static const limb two54m8 = (((limb)1) << 54) - 8;
+
+    out[0] = in[0] + two54m152 - out[0];
+    out[1] = in[1] + two54m8 - out[1];
+    out[2] = in[2] + two54m8 - out[2];
+    out[3] = in[3] + two54m8 - out[3];
+    out[4] = in[4] + two54m8 - out[4];
 }
 
-/*
- * fe_1 - Set field element to one
- */
-static void fe_1(fe h)
+/* Multiply by scalar: output = in * scalar */
+static inline void
+fscalar_product(felem output, const felem in, const limb scalar)
 {
-    h[0] = 1;
-    h[1] = 0;
-    h[2] = 0;
-    h[3] = 0;
-    h[4] = 0;
+    uint128_t a;
+
+    a = ((uint128_t)in[0]) * scalar;
+    output[0] = ((limb)a) & 0x7ffffffffffff;
+
+    a = ((uint128_t)in[1]) * scalar + ((limb)(a >> 51));
+    output[1] = ((limb)a) & 0x7ffffffffffff;
+
+    a = ((uint128_t)in[2]) * scalar + ((limb)(a >> 51));
+    output[2] = ((limb)a) & 0x7ffffffffffff;
+
+    a = ((uint128_t)in[3]) * scalar + ((limb)(a >> 51));
+    output[3] = ((limb)a) & 0x7ffffffffffff;
+
+    a = ((uint128_t)in[4]) * scalar + ((limb)(a >> 51));
+    output[4] = ((limb)a) & 0x7ffffffffffff;
+
+    output[0] += (a >> 51) * 19;
 }
 
-/*
- * fe_add - Add two field elements: h = f + g
- *
- * Simple limb-by-limb addition. No reduction needed here; limbs can grow
- * and we'll reduce later.
- */
-static void fe_add(fe h, const fe f, const fe g)
+/* Multiply two field elements: output = in2 * in */
+static inline void
+fmul(felem output, const felem in2, const felem in)
 {
-    h[0] = f[0] + g[0];
-    h[1] = f[1] + g[1];
-    h[2] = f[2] + g[2];
-    h[3] = f[3] + g[3];
-    h[4] = f[4] + g[4];
+    uint128_t t[5];
+    limb r0, r1, r2, r3, r4, s0, s1, s2, s3, s4, c;
+
+    r0 = in[0];
+    r1 = in[1];
+    r2 = in[2];
+    r3 = in[3];
+    r4 = in[4];
+
+    s0 = in2[0];
+    s1 = in2[1];
+    s2 = in2[2];
+    s3 = in2[3];
+    s4 = in2[4];
+
+    t[0] = ((uint128_t)r0) * s0;
+    t[1] = ((uint128_t)r0) * s1 + ((uint128_t)r1) * s0;
+    t[2] = ((uint128_t)r0) * s2 + ((uint128_t)r2) * s0 + ((uint128_t)r1) * s1;
+    t[3] = ((uint128_t)r0) * s3 + ((uint128_t)r3) * s0 + ((uint128_t)r1) * s2 + ((uint128_t)r2) * s1;
+    t[4] = ((uint128_t)r0) * s4 + ((uint128_t)r4) * s0 + ((uint128_t)r3) * s1 + ((uint128_t)r1) * s3 + ((uint128_t)r2) * s2;
+
+    r4 *= 19;
+    r1 *= 19;
+    r2 *= 19;
+    r3 *= 19;
+
+    t[0] += ((uint128_t)r4) * s1 + ((uint128_t)r1) * s4 + ((uint128_t)r2) * s3 + ((uint128_t)r3) * s2;
+    t[1] += ((uint128_t)r4) * s2 + ((uint128_t)r2) * s4 + ((uint128_t)r3) * s3;
+    t[2] += ((uint128_t)r4) * s3 + ((uint128_t)r3) * s4;
+    t[3] += ((uint128_t)r4) * s4;
+
+    r0 = (limb)t[0] & 0x7ffffffffffff; c = (limb)(t[0] >> 51);
+    t[1] += c; r1 = (limb)t[1] & 0x7ffffffffffff; c = (limb)(t[1] >> 51);
+    t[2] += c; r2 = (limb)t[2] & 0x7ffffffffffff; c = (limb)(t[2] >> 51);
+    t[3] += c; r3 = (limb)t[3] & 0x7ffffffffffff; c = (limb)(t[3] >> 51);
+    t[4] += c; r4 = (limb)t[4] & 0x7ffffffffffff; c = (limb)(t[4] >> 51);
+    r0 += c * 19; c = r0 >> 51; r0 = r0 & 0x7ffffffffffff;
+    r1 += c; c = r1 >> 51; r1 = r1 & 0x7ffffffffffff;
+    r2 += c;
+
+    output[0] = r0;
+    output[1] = r1;
+    output[2] = r2;
+    output[3] = r3;
+    output[4] = r4;
 }
 
-/*
- * fe_sub - Subtract field elements: h = f - g
- *
- * We add a multiple of p first to ensure no underflow.
- * 2*p in radix 2^51 is approximately 2^52 per limb.
- */
-static void fe_sub(fe h, const fe f, const fe g)
+/* Square a field element (repeated count times) */
+static inline void
+fsquare_times(felem output, const felem in, limb count)
 {
-    /*
-     * Add 2*p before subtracting to avoid negative numbers.
-     * 2*p = 2*(2^255 - 19) = 2^256 - 38
-     *
-     * In radix 2^51:
-     *   2*p ≈ [0xFFFFFFFFFFFDA, 0xFFFFFFFFFFFFE, 0xFFFFFFFFFFFFE,
-     *          0xFFFFFFFFFFFFE, 0xFFFFFFFFFFFFE]
-     *
-     * Simplified: we add enough to each limb to ensure positivity.
-     */
-    h[0] = f[0] + 0x1FFFFFFFFFFFDA - g[0];  /* 2*p₀ - 38 */
-    h[1] = f[1] + 0x1FFFFFFFFFFFFE - g[1];  /* 2*p₁ */
-    h[2] = f[2] + 0x1FFFFFFFFFFFFE - g[2];
-    h[3] = f[3] + 0x1FFFFFFFFFFFFE - g[3];
-    h[4] = f[4] + 0x1FFFFFFFFFFFFE - g[4];
-}
+    uint128_t t[5];
+    limb r0, r1, r2, r3, r4, c;
+    limb d0, d1, d2, d4, d419;
 
-/*
- * fe_mul - Multiply two field elements: h = f * g mod p
- *
- * This is the core expensive operation. We compute the full product
- * (which requires 10 limbs) then reduce modulo p.
- *
- * The key trick: when reducing, we use 2^255 ≡ 19 (mod p).
- * So high limbs get multiplied by 19 and added to low limbs.
- */
-static void fe_mul(fe h, const fe f, const fe g)
-{
-    /*
-     * Full product expansion:
-     *
-     * (f0 + f1*B + f2*B² + f3*B³ + f4*B⁴) * (g0 + g1*B + ... + g4*B⁴)
-     * where B = 2^51
-     *
-     * Result has terms from B⁰ to B⁸, which we store in d0 through d4
-     * after folding high terms back using 2^255 ≡ 19.
-     *
-     * Specifically: B⁵ = 2^255 ≡ 19, so fᵢ*gⱼ*B^(i+j) for i+j ≥ 5
-     * contributes to limb (i+j-5) with a factor of 19.
-     */
-    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
-    int64_t g0 = g[0], g1 = g[1], g2 = g[2], g3 = g[3], g4 = g[4];
+    r0 = in[0];
+    r1 = in[1];
+    r2 = in[2];
+    r3 = in[3];
+    r4 = in[4];
 
-    /*
-     * Precompute 19*gᵢ for reduction.
-     * Terms like f3*g4 contribute at position B⁷ = 19²*B² ≡ 361*B²,
-     * but we actually need 19*g4 because we process one reduction step.
-     *
-     * More precisely: we're computing modulo 2^255-19, and 2^255 ≡ 19,
-     * so any overflow from limb 4 to limb 5 gets multiplied by 19 and
-     * added back to limb 0.
-     */
-    int64_t g1_19 = 19 * g1;
-    int64_t g2_19 = 19 * g2;
-    int64_t g3_19 = 19 * g3;
-    int64_t g4_19 = 19 * g4;
+    do {
+        d0 = r0 * 2;
+        d1 = r1 * 2;
+        d2 = r2 * 2 * 19;
+        d419 = r4 * 19;
+        d4 = d419 * 2;
 
-    /*
-     * Compute product limbs. Each dᵢ collects contributions from all
-     * fⱼ*gₖ where (j+k) mod 5 = i.
-     *
-     * For j+k < 5: coefficient is 1
-     * For j+k >= 5: coefficient is 19 (from reduction)
-     */
-    int64_t d0 = f0*g0 + f1*g4_19 + f2*g3_19 + f3*g2_19 + f4*g1_19;
-    int64_t d1 = f0*g1 + f1*g0 + f2*g4_19 + f3*g3_19 + f4*g2_19;
-    int64_t d2 = f0*g2 + f1*g1 + f2*g0 + f3*g4_19 + f4*g3_19;
-    int64_t d3 = f0*g3 + f1*g2 + f2*g1 + f3*g0 + f4*g4_19;
-    int64_t d4 = f0*g4 + f1*g3 + f2*g2 + f3*g1 + f4*g0;
+        t[0] = ((uint128_t)r0) * r0 + ((uint128_t)d4) * r1 + (((uint128_t)d2) * (r3));
+        t[1] = ((uint128_t)d0) * r1 + ((uint128_t)d4) * r2 + (((uint128_t)r3) * (r3 * 19));
+        t[2] = ((uint128_t)d0) * r2 + ((uint128_t)r1) * r1 + (((uint128_t)d4) * (r3));
+        t[3] = ((uint128_t)d0) * r3 + ((uint128_t)d1) * r2 + (((uint128_t)r4) * (d419));
+        t[4] = ((uint128_t)d0) * r4 + ((uint128_t)d1) * r3 + (((uint128_t)r2) * (r2));
 
-    /*
-     * Carry propagation
-     *
-     * Each limb should be < 2^51. Excess bits carry to the next limb.
-     * Carry from d4 wraps around to d0, multiplied by 19.
-     */
-    int64_t c;
+        r0 = (limb)t[0] & 0x7ffffffffffff; c = (limb)(t[0] >> 51);
+        t[1] += c; r1 = (limb)t[1] & 0x7ffffffffffff; c = (limb)(t[1] >> 51);
+        t[2] += c; r2 = (limb)t[2] & 0x7ffffffffffff; c = (limb)(t[2] >> 51);
+        t[3] += c; r3 = (limb)t[3] & 0x7ffffffffffff; c = (limb)(t[3] >> 51);
+        t[4] += c; r4 = (limb)t[4] & 0x7ffffffffffff; c = (limb)(t[4] >> 51);
+        r0 += c * 19; c = r0 >> 51; r0 = r0 & 0x7ffffffffffff;
+        r1 += c; c = r1 >> 51; r1 = r1 & 0x7ffffffffffff;
+        r2 += c;
+    } while (--count);
 
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;  /* 2^51 - 1 */
-    c = d1 >> 51; d2 += c; d1 &= 0x7FFFFFFFFFFFF;
-    c = d2 >> 51; d3 += c; d2 &= 0x7FFFFFFFFFFFF;
-    c = d3 >> 51; d4 += c; d3 &= 0x7FFFFFFFFFFFF;
-    c = d4 >> 51; d0 += c * 19; d4 &= 0x7FFFFFFFFFFFF;
-
-    /* One more carry (c*19 might have pushed d0 over) */
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;
-
-    h[0] = d0;
-    h[1] = d1;
-    h[2] = d2;
-    h[3] = d3;
-    h[4] = d4;
-}
-
-/*
- * fe_sq - Square a field element: h = f² mod p
- *
- * Squaring is faster than multiplication because fᵢ*fⱼ = fⱼ*fᵢ,
- * so we can compute half the cross terms and double them.
- */
-static void fe_sq(fe h, const fe f)
-{
-    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
-
-    /* Precompute 2*fᵢ for cross terms */
-    int64_t f0_2 = 2 * f0;
-    int64_t f1_2 = 2 * f1;
-    int64_t f2_2 = 2 * f2;
-    int64_t f3_2 = 2 * f3;
-
-    /* Precompute 19*fᵢ for reduction */
-    int64_t f1_19 = 19 * f1;
-    int64_t f2_19 = 19 * f2;
-    int64_t f3_19 = 19 * f3;
-    int64_t f4_19 = 19 * f4;
-
-    /*
-     * Compute square terms and cross terms.
-     * Cross terms appear twice (fᵢfⱼ + fⱼfᵢ), handled by the f*_2 factors.
-     */
-    int64_t d0 = f0*f0 + f1_2*f4_19 + f2_2*f3_19;
-    int64_t d1 = f0_2*f1 + f2*f4_19 + f3*f3_19;
-    int64_t d2 = f0_2*f2 + f1*f1 + f3_2*f4_19;
-    int64_t d3 = f0_2*f3 + f1_2*f2 + f4*f4_19;
-    int64_t d4 = f0_2*f4 + f1_2*f3 + f2*f2;
-
-    /* Carry propagation (same as fe_mul) */
-    int64_t c;
-
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;
-    c = d1 >> 51; d2 += c; d1 &= 0x7FFFFFFFFFFFF;
-    c = d2 >> 51; d3 += c; d2 &= 0x7FFFFFFFFFFFF;
-    c = d3 >> 51; d4 += c; d3 &= 0x7FFFFFFFFFFFF;
-    c = d4 >> 51; d0 += c * 19; d4 &= 0x7FFFFFFFFFFFF;
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;
-
-    h[0] = d0;
-    h[1] = d1;
-    h[2] = d2;
-    h[3] = d3;
-    h[4] = d4;
-}
-
-/*
- * fe_mul121666 - Multiply by constant 121666
- *
- * This specific constant (a24 + 1 = 121666) appears in the Montgomery ladder.
- * Having a dedicated function is slightly faster than general multiplication.
- */
-static void fe_mul121666(fe h, const fe f)
-{
-    int64_t f0 = f[0], f1 = f[1], f2 = f[2], f3 = f[3], f4 = f[4];
-
-    int64_t d0 = f0 * 121666;
-    int64_t d1 = f1 * 121666;
-    int64_t d2 = f2 * 121666;
-    int64_t d3 = f3 * 121666;
-    int64_t d4 = f4 * 121666;
-
-    /* Carry propagation */
-    int64_t c;
-
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;
-    c = d1 >> 51; d2 += c; d1 &= 0x7FFFFFFFFFFFF;
-    c = d2 >> 51; d3 += c; d2 &= 0x7FFFFFFFFFFFF;
-    c = d3 >> 51; d4 += c; d3 &= 0x7FFFFFFFFFFFF;
-    c = d4 >> 51; d0 += c * 19; d4 &= 0x7FFFFFFFFFFFF;
-    c = d0 >> 51; d1 += c; d0 &= 0x7FFFFFFFFFFFF;
-
-    h[0] = d0;
-    h[1] = d1;
-    h[2] = d2;
-    h[3] = d3;
-    h[4] = d4;
-}
-
-/*
- * fe_invert - Compute multiplicative inverse: h = f^(-1) mod p
- *
- * By Fermat's little theorem: f^(-1) = f^(p-2) mod p
- *
- * p-2 = 2^255 - 21 = 2^255 - 19 - 2 = p - 2
- *
- * We compute this using repeated squaring, with a specific addition chain
- * that minimizes the number of multiplications.
- */
-static void fe_invert(fe h, const fe f)
-{
-    fe t0, t1, t2, t3;
-    int i;
-
-    /*
-     * Addition chain for p-2 = 2^255 - 21:
-     *
-     * We build up powers of f using squares and multiplications.
-     * The specific chain here computes f^(p-2) in ~254 squarings + 11 multiplications.
-     */
-
-    /* t0 = f^(2^1) */
-    fe_sq(t0, f);
-
-    /* t1 = f^(2^2) */
-    fe_sq(t1, t0);
-    fe_sq(t1, t1);
-
-    /* t1 = f^(2^2) * f = f^(2^2 + 1) */
-    fe_mul(t1, t1, f);
-
-    /* t0 = f^(2^1) * f^(2^2 + 1) = f^(2^2 + 2^1 + 1) */
-    fe_mul(t0, t0, t1);
-
-    /* t2 = f^(2^3 + 2^2 + 2^1) */
-    fe_sq(t2, t0);
-
-    /* t1 = f^(2^3 + 2^2 + 2^1 + 2^2 + 1) = f^(2^3 + 2*2^2 + 2^1 + 1) */
-    fe_mul(t1, t2, t1);
-
-    /* t2 = f^(2^5 * (2^3 + 2*2^2 + 2^1 + 1)) */
-    fe_sq(t2, t1);
-    for (i = 0; i < 4; i++) { fe_sq(t2, t2); }
-
-    /* Continue building up the exponent... */
-    fe_mul(t1, t2, t1);  /* t1 = f^(...) */
-
-    fe_sq(t2, t1);
-    for (i = 0; i < 9; i++) { fe_sq(t2, t2); }
-    fe_mul(t2, t2, t1);
-
-    fe_sq(t3, t2);
-    for (i = 0; i < 19; i++) { fe_sq(t3, t3); }
-    fe_mul(t2, t3, t2);
-
-    fe_sq(t2, t2);
-    for (i = 0; i < 9; i++) { fe_sq(t2, t2); }
-    fe_mul(t1, t2, t1);
-
-    fe_sq(t2, t1);
-    for (i = 0; i < 49; i++) { fe_sq(t2, t2); }
-    fe_mul(t2, t2, t1);
-
-    fe_sq(t3, t2);
-    for (i = 0; i < 99; i++) { fe_sq(t3, t3); }
-    fe_mul(t2, t3, t2);
-
-    fe_sq(t2, t2);
-    for (i = 0; i < 49; i++) { fe_sq(t2, t2); }
-    fe_mul(t1, t2, t1);
-
-    fe_sq(t1, t1);
-    for (i = 0; i < 4; i++) { fe_sq(t1, t1); }
-
-    fe_mul(h, t1, t0);
-}
-
-/*
- * fe_tobytes - Convert field element to 32-byte array (little-endian)
- *
- * This performs final reduction to ensure the value is in [0, p).
- */
-static void fe_tobytes(uint8_t s[32], const fe h)
-{
-    int64_t h0 = h[0], h1 = h[1], h2 = h[2], h3 = h[3], h4 = h[4];
-    int64_t c;
-
-    /* Full carry chain to normalize */
-    c = h0 >> 51; h1 += c; h0 &= 0x7FFFFFFFFFFFF;
-    c = h1 >> 51; h2 += c; h1 &= 0x7FFFFFFFFFFFF;
-    c = h2 >> 51; h3 += c; h2 &= 0x7FFFFFFFFFFFF;
-    c = h3 >> 51; h4 += c; h3 &= 0x7FFFFFFFFFFFF;
-    c = h4 >> 51; h0 += c * 19; h4 &= 0x7FFFFFFFFFFFF;
-    c = h0 >> 51; h1 += c; h0 &= 0x7FFFFFFFFFFFF;
-
-    /*
-     * Reduce to canonical form [0, p)
-     *
-     * If h >= p, subtract p. We check by adding 19 and seeing if bit 255 is set.
-     * p = 2^255 - 19, so h >= p iff h + 19 >= 2^255.
-     */
-    int64_t g0 = h0 + 19;
-    c = g0 >> 51;
-    int64_t g1 = h1 + c; c = g1 >> 51;
-    int64_t g2 = h2 + c; c = g2 >> 51;
-    int64_t g3 = h3 + c; c = g3 >> 51;
-    int64_t g4 = h4 + c - (1LL << 51);
-
-    /* If g4 >= 0, we need to subtract p (use g); otherwise use h */
-    c = g4 >> 63;  /* -1 if g4 < 0 (use h), 0 if g4 >= 0 (use g) */
-    int64_t mask = c;
-
-    h0 = (h0 & mask) | (g0 & ~mask & 0x7FFFFFFFFFFFF);
-    h1 = (h1 & mask) | (g1 & ~mask & 0x7FFFFFFFFFFFF);
-    h2 = (h2 & mask) | (g2 & ~mask & 0x7FFFFFFFFFFFF);
-    h3 = (h3 & mask) | (g3 & ~mask & 0x7FFFFFFFFFFFF);
-    h4 = (h4 & mask) | (g4 & ~mask & 0x7FFFFFFFFFFFF);
-
-    /* Pack into 32 bytes, little-endian */
-    s[0]  = (uint8_t)(h0);
-    s[1]  = (uint8_t)(h0 >> 8);
-    s[2]  = (uint8_t)(h0 >> 16);
-    s[3]  = (uint8_t)(h0 >> 24);
-    s[4]  = (uint8_t)(h0 >> 32);
-    s[5]  = (uint8_t)(h0 >> 40);
-    s[6]  = (uint8_t)((h0 >> 48) | (h1 << 3));
-    s[7]  = (uint8_t)(h1 >> 5);
-    s[8]  = (uint8_t)(h1 >> 13);
-    s[9]  = (uint8_t)(h1 >> 21);
-    s[10] = (uint8_t)(h1 >> 29);
-    s[11] = (uint8_t)(h1 >> 37);
-    s[12] = (uint8_t)((h1 >> 45) | (h2 << 6));
-    s[13] = (uint8_t)(h2 >> 2);
-    s[14] = (uint8_t)(h2 >> 10);
-    s[15] = (uint8_t)(h2 >> 18);
-    s[16] = (uint8_t)(h2 >> 26);
-    s[17] = (uint8_t)(h2 >> 34);
-    s[18] = (uint8_t)(h2 >> 42);
-    s[19] = (uint8_t)((h2 >> 50) | (h3 << 1));
-    s[20] = (uint8_t)(h3 >> 7);
-    s[21] = (uint8_t)(h3 >> 15);
-    s[22] = (uint8_t)(h3 >> 23);
-    s[23] = (uint8_t)(h3 >> 31);
-    s[24] = (uint8_t)(h3 >> 39);
-    s[25] = (uint8_t)((h3 >> 47) | (h4 << 4));
-    s[26] = (uint8_t)(h4 >> 4);
-    s[27] = (uint8_t)(h4 >> 12);
-    s[28] = (uint8_t)(h4 >> 20);
-    s[29] = (uint8_t)(h4 >> 28);
-    s[30] = (uint8_t)(h4 >> 36);
-    s[31] = (uint8_t)(h4 >> 44);
-}
-
-/*
- * fe_frombytes - Convert 32-byte array to field element
- */
-static void fe_frombytes(fe h, const uint8_t s[32])
-{
-    int64_t h0 = (int64_t)s[0] | ((int64_t)s[1] << 8) | ((int64_t)s[2] << 16) |
-                 ((int64_t)s[3] << 24) | ((int64_t)s[4] << 32) | ((int64_t)s[5] << 40) |
-                 (((int64_t)s[6] & 0x07) << 48);
-
-    int64_t h1 = ((int64_t)s[6] >> 3) | ((int64_t)s[7] << 5) | ((int64_t)s[8] << 13) |
-                 ((int64_t)s[9] << 21) | ((int64_t)s[10] << 29) | ((int64_t)s[11] << 37) |
-                 (((int64_t)s[12] & 0x3f) << 45);
-
-    int64_t h2 = ((int64_t)s[12] >> 6) | ((int64_t)s[13] << 2) | ((int64_t)s[14] << 10) |
-                 ((int64_t)s[15] << 18) | ((int64_t)s[16] << 26) | ((int64_t)s[17] << 34) |
-                 ((int64_t)s[18] << 42) | (((int64_t)s[19] & 0x01) << 50);
-
-    int64_t h3 = ((int64_t)s[19] >> 1) | ((int64_t)s[20] << 7) | ((int64_t)s[21] << 15) |
-                 ((int64_t)s[22] << 23) | ((int64_t)s[23] << 31) | ((int64_t)s[24] << 39) |
-                 (((int64_t)s[25] & 0x0f) << 47);
-
-    int64_t h4 = ((int64_t)s[25] >> 4) | ((int64_t)s[26] << 4) | ((int64_t)s[27] << 12) |
-                 ((int64_t)s[28] << 20) | ((int64_t)s[29] << 28) | ((int64_t)s[30] << 36) |
-                 ((int64_t)s[31] << 44);
-
-    h[0] = h0;
-    h[1] = h1;
-    h[2] = h2;
-    h[3] = h3;
-    h[4] = h4;
+    output[0] = r0;
+    output[1] = r1;
+    output[2] = r2;
+    output[3] = r3;
+    output[4] = r4;
 }
 
 /*
  * ===========================================================================
- * Conditional Swap (Constant-Time)
+ * Byte Conversion
  * ===========================================================================
- *
- * cswap swaps two field elements if swap=1, does nothing if swap=0.
- * This is done in constant time - no branching on the swap value.
  */
-static void fe_cswap(fe f, fe g, int64_t swap)
+
+/* Load a little-endian 64-bit number */
+static limb
+load_limb(const uint8_t *in)
 {
-    /*
-     * Convert swap (0 or 1) to a mask:
-     *   swap=0 -> mask=0x0000000000000000
-     *   swap=1 -> mask=0xFFFFFFFFFFFFFFFF
-     *
-     * Then XOR-swap: if mask is all-1s, swapping occurs; if all-0s, no-op.
-     */
-    swap = -swap;  /* 0 -> 0, 1 -> -1 = 0xFFFF... */
+    return ((limb)in[0]) |
+           (((limb)in[1]) << 8) |
+           (((limb)in[2]) << 16) |
+           (((limb)in[3]) << 24) |
+           (((limb)in[4]) << 32) |
+           (((limb)in[5]) << 40) |
+           (((limb)in[6]) << 48) |
+           (((limb)in[7]) << 56);
+}
 
-    int64_t x0 = (f[0] ^ g[0]) & swap;
-    int64_t x1 = (f[1] ^ g[1]) & swap;
-    int64_t x2 = (f[2] ^ g[2]) & swap;
-    int64_t x3 = (f[3] ^ g[3]) & swap;
-    int64_t x4 = (f[4] ^ g[4]) & swap;
+/* Store a little-endian 64-bit number */
+static void
+store_limb(uint8_t *out, limb in)
+{
+    out[0] = in & 0xff;
+    out[1] = (in >> 8) & 0xff;
+    out[2] = (in >> 16) & 0xff;
+    out[3] = (in >> 24) & 0xff;
+    out[4] = (in >> 32) & 0xff;
+    out[5] = (in >> 40) & 0xff;
+    out[6] = (in >> 48) & 0xff;
+    out[7] = (in >> 56) & 0xff;
+}
 
-    f[0] ^= x0; g[0] ^= x0;
-    f[1] ^= x1; g[1] ^= x1;
-    f[2] ^= x2; g[2] ^= x2;
-    f[3] ^= x3; g[3] ^= x3;
-    f[4] ^= x4; g[4] ^= x4;
+/* Expand 32-byte little-endian to polynomial form */
+static void
+fexpand(limb *output, const uint8_t *in)
+{
+    output[0] = load_limb(in) & 0x7ffffffffffff;
+    output[1] = (load_limb(in + 6) >> 3) & 0x7ffffffffffff;
+    output[2] = (load_limb(in + 12) >> 6) & 0x7ffffffffffff;
+    output[3] = (load_limb(in + 19) >> 1) & 0x7ffffffffffff;
+    output[4] = (load_limb(in + 24) >> 12) & 0x7ffffffffffff;
+}
+
+/* Contract polynomial form to 32-byte little-endian (fully reduced) */
+static void
+fcontract(uint8_t *output, const felem input)
+{
+    uint128_t t[5];
+
+    t[0] = input[0];
+    t[1] = input[1];
+    t[2] = input[2];
+    t[3] = input[3];
+    t[4] = input[4];
+
+    t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+    t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+    t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+    t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+    t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+    t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+    t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+    t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+    t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+    t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+    /* now t is between 0 and 2^255-1, properly carried. */
+    t[0] += 19;
+
+    t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+    t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+    t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+    t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+    t[0] += 19 * (t[4] >> 51); t[4] &= 0x7ffffffffffff;
+
+    /* now between 19 and 2^255-1 in both cases, and offset by 19. */
+    t[0] += 0x8000000000000 - 19;
+    t[1] += 0x8000000000000 - 1;
+    t[2] += 0x8000000000000 - 1;
+    t[3] += 0x8000000000000 - 1;
+    t[4] += 0x8000000000000 - 1;
+
+    /* now between 2^255 and 2^256-20, and offset by 2^255. */
+    t[1] += t[0] >> 51; t[0] &= 0x7ffffffffffff;
+    t[2] += t[1] >> 51; t[1] &= 0x7ffffffffffff;
+    t[3] += t[2] >> 51; t[2] &= 0x7ffffffffffff;
+    t[4] += t[3] >> 51; t[3] &= 0x7ffffffffffff;
+    t[4] &= 0x7ffffffffffff;
+
+    store_limb(output,     t[0] | (t[1] << 51));
+    store_limb(output + 8,  (t[1] >> 13) | (t[2] << 38));
+    store_limb(output + 16, (t[2] >> 26) | (t[3] << 25));
+    store_limb(output + 24, (t[3] >> 39) | (t[4] << 12));
 }
 
 /*
  * ===========================================================================
  * Montgomery Ladder
  * ===========================================================================
+ */
+
+/* Constant-time conditional swap */
+static void
+swap_conditional(limb a[5], limb b[5], limb iswap)
+{
+    unsigned i;
+    const limb swap = -iswap;
+
+    for (i = 0; i < 5; ++i) {
+        const limb x = swap & (a[i] ^ b[i]);
+        a[i] ^= x;
+        b[i] ^= x;
+    }
+}
+
+/*
+ * Montgomery ladder step.
  *
- * This computes scalar multiplication: result = scalar * point
- * using the Montgomery ladder algorithm.
+ * Input: Q, Q', Q-Q'
+ * Output: 2Q, Q+Q'
+ */
+static void
+fmonty(limb *x2, limb *z2,    /* output 2Q */
+       limb *x3, limb *z3,    /* output Q + Q' */
+       limb *x, limb *z,      /* input Q (destroyed) */
+       limb *xprime, limb *zprime, /* input Q' (destroyed) */
+       const limb *qmqp)      /* input Q - Q' */
+{
+    limb origx[5], origxprime[5], zzz[5], xx[5], zz[5], xxprime[5],
+         zzprime[5], zzzprime[5];
+
+    memcpy(origx, x, 5 * sizeof(limb));
+    fsum(x, z);
+    fdifference_backwards(z, origx);
+
+    memcpy(origxprime, xprime, sizeof(limb) * 5);
+    fsum(xprime, zprime);
+    fdifference_backwards(zprime, origxprime);
+    fmul(xxprime, xprime, z);
+    fmul(zzprime, x, zprime);
+    memcpy(origxprime, xxprime, sizeof(limb) * 5);
+    fsum(xxprime, zzprime);
+    fdifference_backwards(zzprime, origxprime);
+    fsquare_times(x3, xxprime, 1);
+    fsquare_times(zzzprime, zzprime, 1);
+    fmul(z3, zzzprime, qmqp);
+
+    fsquare_times(xx, x, 1);
+    fsquare_times(zz, z, 1);
+    fmul(x2, xx, zz);
+    fdifference_backwards(zz, xx);
+    fscalar_product(zzz, zz, 121665);
+    fsum(zzz, xx);
+    fmul(z2, zz, zzz);
+}
+
+/*
+ * Scalar multiplication: resultx/resultz = n * q
+ *
+ * n: 32-byte scalar (little-endian)
+ * q: input point (polynomial form)
+ */
+static void
+cmult(limb *resultx, limb *resultz, const uint8_t *n, const limb *q)
+{
+    limb a[5] = {0}, b[5] = {1}, c[5] = {1}, d[5] = {0};
+    limb *nqpqx = a, *nqpqz = b, *nqx = c, *nqz = d, *t;
+    limb e[5] = {0}, f[5] = {1}, g[5] = {0}, h[5] = {1};
+    limb *nqpqx2 = e, *nqpqz2 = f, *nqx2 = g, *nqz2 = h;
+
+    unsigned i, j;
+
+    memcpy(nqpqx, q, sizeof(limb) * 5);
+
+    for (i = 0; i < 32; ++i) {
+        uint8_t byte = n[31 - i];
+        for (j = 0; j < 8; ++j) {
+            const limb bit = byte >> 7;
+
+            swap_conditional(nqx, nqpqx, bit);
+            swap_conditional(nqz, nqpqz, bit);
+            fmonty(nqx2, nqz2,
+                   nqpqx2, nqpqz2,
+                   nqx, nqz,
+                   nqpqx, nqpqz,
+                   q);
+            swap_conditional(nqx2, nqpqx2, bit);
+            swap_conditional(nqz2, nqpqz2, bit);
+
+            t = nqx;
+            nqx = nqx2;
+            nqx2 = t;
+            t = nqz;
+            nqz = nqz2;
+            nqz2 = t;
+            t = nqpqx;
+            nqpqx = nqpqx2;
+            nqpqx2 = t;
+            t = nqpqz;
+            nqpqz = nqpqz2;
+            nqpqz2 = t;
+
+            byte <<= 1;
+        }
+    }
+
+    memcpy(resultx, nqx, sizeof(limb) * 5);
+    memcpy(resultz, nqz, sizeof(limb) * 5);
+}
+
+/*
+ * Modular inversion: out = z^(-1) mod p
+ *
+ * Uses Fermat's little theorem: z^(-1) = z^(p-2) mod p
+ * where p = 2^255 - 19, so p-2 = 2^255 - 21
+ */
+static void
+crecip(felem out, const felem z)
+{
+    felem a, t0, b, c;
+
+    /* 2 */ fsquare_times(a, z, 1);
+    /* 8 */ fsquare_times(t0, a, 2);
+    /* 9 */ fmul(b, t0, z);
+    /* 11 */ fmul(a, b, a);
+    /* 22 */ fsquare_times(t0, a, 1);
+    /* 2^5 - 2^0 = 31 */ fmul(b, t0, b);
+    /* 2^10 - 2^5 */ fsquare_times(t0, b, 5);
+    /* 2^10 - 2^0 */ fmul(b, t0, b);
+    /* 2^20 - 2^10 */ fsquare_times(t0, b, 10);
+    /* 2^20 - 2^0 */ fmul(c, t0, b);
+    /* 2^40 - 2^20 */ fsquare_times(t0, c, 20);
+    /* 2^40 - 2^0 */ fmul(t0, t0, c);
+    /* 2^50 - 2^10 */ fsquare_times(t0, t0, 10);
+    /* 2^50 - 2^0 */ fmul(b, t0, b);
+    /* 2^100 - 2^50 */ fsquare_times(t0, b, 50);
+    /* 2^100 - 2^0 */ fmul(c, t0, b);
+    /* 2^200 - 2^100 */ fsquare_times(t0, c, 100);
+    /* 2^200 - 2^0 */ fmul(t0, t0, c);
+    /* 2^250 - 2^50 */ fsquare_times(t0, t0, 50);
+    /* 2^250 - 2^0 */ fmul(t0, t0, b);
+    /* 2^255 - 2^5 */ fsquare_times(t0, t0, 5);
+    /* 2^255 - 21 */ fmul(out, t0, a);
+}
+
+/*
+ * ===========================================================================
+ * Core Scalar Multiplication
+ * ===========================================================================
  */
 
 /*
@@ -543,108 +453,35 @@ static const uint8_t BASE_POINT[32] = {
 };
 
 /*
- * curve25519_scalarmult - Scalar multiplication using Montgomery ladder
+ * curve25519_donna - Core scalar multiplication
  *
- * Computes q = n * p where n is a scalar (private key) and p is a point
- * (x-coordinate only, since we use Montgomery form).
+ * mypublic = secret * basepoint
  */
-static void curve25519_scalarmult(uint8_t q[32], const uint8_t n[32], const uint8_t p[32])
+static int
+curve25519_donna(uint8_t *mypublic, const uint8_t *secret, const uint8_t *basepoint)
 {
-    fe x1, x2, z2, x3, z3, tmp0, tmp1;
+    limb bp[5], x[5], z[5], zmone[5];
     uint8_t e[32];
     int i;
 
-    /* Copy and clamp scalar */
-    vpn_memcpy(e, n, 32);
-    e[0] &= 248;   /* Clear bits 0, 1, 2 */
-    e[31] &= 127;  /* Clear bit 255 */
-    e[31] |= 64;   /* Set bit 254 */
+    /* Clamp the scalar */
+    for (i = 0; i < 32; ++i)
+        e[i] = secret[i];
+    e[0] &= 248;
+    e[31] &= 127;
+    e[31] |= 64;
 
-    /* Initialize: x1 = p, x2 = 1, z2 = 0, x3 = p, z3 = 1 */
-    fe_frombytes(x1, p);
-    fe_1(x2);
-    fe_0(z2);
-    fe_copy(x3, x1);
-    fe_1(z3);
-
-    /*
-     * Montgomery ladder: process bits from high to low.
-     *
-     * At each step, we maintain:
-     *   (x2:z2) represents some point Q
-     *   (x3:z3) represents Q + P (where P is the input point)
-     *
-     * If current bit is 0: Q' = 2Q, (Q+P)' = Q + (Q+P)
-     * If current bit is 1: Q' = Q + (Q+P), (Q+P)' = 2(Q+P)
-     *
-     * The conditional swap at the start of each iteration makes this constant-time.
-     */
-    int64_t swap = 0;
-
-    for (i = 254; i >= 0; i--) {
-        int64_t bit = (e[i / 8] >> (i % 8)) & 1;
-        swap ^= bit;
-        fe_cswap(x2, x3, swap);
-        fe_cswap(z2, z3, swap);
-        swap = bit;
-
-        /*
-         * Montgomery ladder step (optimized formulas):
-         *
-         * A = x2 + z2
-         * B = x2 - z2
-         * AA = A²
-         * BB = B²
-         * C = x3 + z3
-         * D = x3 - z3
-         * DA = D * A
-         * CB = C * B
-         * x3 = (DA + CB)²
-         * z3 = x1 * (DA - CB)²
-         * x2 = AA * BB
-         * E = AA - BB
-         * z2 = E * (AA + a24 * E)
-         *
-         * where a24 = (A-2)/4 = 121665 for Curve25519.
-         */
-        fe A, B, AA, BB, C, D, DA, CB, E;
-
-        fe_add(A, x2, z2);   /* A = x2 + z2 */
-        fe_sub(B, x2, z2);   /* B = x2 - z2 */
-        fe_sq(AA, A);        /* AA = A² */
-        fe_sq(BB, B);        /* BB = B² */
-
-        fe_add(C, x3, z3);   /* C = x3 + z3 */
-        fe_sub(D, x3, z3);   /* D = x3 - z3 */
-        fe_mul(DA, D, A);    /* DA = D * A */
-        fe_mul(CB, C, B);    /* CB = C * B */
-
-        fe_add(tmp0, DA, CB);
-        fe_sq(x3, tmp0);     /* x3 = (DA + CB)² */
-
-        fe_sub(tmp1, DA, CB);
-        fe_sq(tmp1, tmp1);
-        fe_mul(z3, x1, tmp1); /* z3 = x1 * (DA - CB)² */
-
-        fe_mul(x2, AA, BB);  /* x2 = AA * BB */
-
-        fe_sub(E, AA, BB);   /* E = AA - BB */
-        fe_mul121666(tmp0, E); /* tmp0 = a24 * E */
-        fe_add(tmp0, tmp0, AA); /* tmp0 = AA + a24 * E */
-        fe_mul(z2, E, tmp0); /* z2 = E * (AA + a24 * E) */
-    }
-
-    /* Final conditional swap */
-    fe_cswap(x2, x3, swap);
-    fe_cswap(z2, z3, swap);
-
-    /* Convert projective to affine: q = x2 / z2 = x2 * z2^(-1) */
-    fe_invert(z2, z2);
-    fe_mul(x2, x2, z2);
-    fe_tobytes(q, x2);
+    /* Expand basepoint, compute scalar mult, convert to affine */
+    fexpand(bp, basepoint);
+    cmult(x, z, e, bp);
+    crecip(zmone, z);
+    fmul(z, x, zmone);
+    fcontract(mypublic, z);
 
     /* Clear sensitive data */
     vpn_memzero(e, sizeof(e));
+
+    return 0;
 }
 
 /*
@@ -663,21 +500,20 @@ void curve25519_clamp(uint8_t key[CURVE25519_KEY_SIZE])
 void curve25519_keygen(uint8_t public_key[CURVE25519_KEY_SIZE],
                        const uint8_t private_key[CURVE25519_KEY_SIZE])
 {
-    curve25519_scalarmult(public_key, private_key, BASE_POINT);
+    curve25519_donna(public_key, private_key, BASE_POINT);
 }
 
 vpn_error_t curve25519_shared(uint8_t shared[CURVE25519_SHARED_SIZE],
                               const uint8_t their_public[CURVE25519_KEY_SIZE],
                               const uint8_t my_private[CURVE25519_KEY_SIZE])
 {
-    curve25519_scalarmult(shared, my_private, their_public);
+    curve25519_donna(shared, my_private, their_public);
 
     /*
      * Check for all-zeros result (small-subgroup attack).
      *
      * If the peer sends a malicious public key from a small subgroup,
-     * the shared secret will be all zeros. A real implementation should
-     * reject this.
+     * the shared secret will be all zeros. Reject this.
      */
     uint8_t zeros[32] = {0};
     if (vpn_memeq(shared, zeros, 32)) {

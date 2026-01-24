@@ -614,13 +614,19 @@ int main(int argc, char *argv[])
         return key_result;
     }
 
+    /* Show usage if no arguments provided */
+    if (argc == 1) {
+        print_usage(argv[0]);
+        return 0;
+    }
+
     /* Parse command line first to get -v flag */
     if (parse_args(argc, argv) != VPN_OK) {
         return 1;
     }
 
     /* Initialize logging based on verbosity */
-    log_init(g_verbose ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO, LOG_OUTPUT_STDERR, NULL);
+    log_init(g_verbose ? LOG_LEVEL_DEBUG : LOG_LEVEL_INFO, LOG_OUTPUT_STDERR);
 
     printf("===============================================\n");
     printf("  HinkyPunk VPN\n");

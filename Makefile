@@ -159,6 +159,28 @@ test: lib
 	# $(BINDIR)/test_crypto
 
 #
+# Deployment targets
+#
+
+# Verify build
+.PHONY: verify
+verify: all
+	@./deploy/verify.sh
+
+# Install binary (requires root)
+.PHONY: install
+install: all
+	@install -d /usr/local/bin
+	@install -m 755 $(TARGET) /usr/local/bin/hinkypunk
+	@echo "Installed to /usr/local/bin/hinkypunk"
+
+# Uninstall
+.PHONY: uninstall
+uninstall:
+	@rm -f /usr/local/bin/hinkypunk
+	@echo "Uninstalled hinkypunk"
+
+#
 # Development helpers
 #
 
